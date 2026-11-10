@@ -1,6 +1,7 @@
 # LightHouse Enterprise — Plan
 
-Status: proposal, written 2026-11-10. Nothing here is built yet.
+Status: proposal, written 2026-11-10, hosting revised the same day (Supabase plus one
+managed container; Go agent confirmed). Nothing here is built yet.
 
 ## 1. Product
 
@@ -38,12 +39,45 @@ and audit, an endpoint agent that can act, and billing.
 | Investigation loop | Multi-step tool use for chat and endpoint work, with policy checks and approval pauses | Python, Anthropic SDK (manual loop, state in Postgres) |
 | API | Tenants, users, alerts, chat, approvals, policy, audit, agent enrolment | FastAPI |
 | Web console | Queue, alert detail, chat, device view, approvals, settings, audit export | React + TypeScript + Vite |
-| Agent gateway | Long-lived outbound connections from endpoint agents, action dispatch, result intake | FastAPI WebSocket service behind mTLS |
-| Endpoint agent | Enrol, collect, execute typed actions, undo, report | Go service (recommended), signed |
-| Data | Tenant-scoped storage with row-level security, append-only audit | Postgres |
-| Secrets | Anthropic key, per-tenant connector credentials, signing keys | Azure Key Vault + managed identity |
+| Agent gateway | Outbound HTTPS long-polling from endpoint agents, action dispatch, result intake | Part of the FastAPI service; every request signed by the device's own key |
+| Endpoint agent | Enrol, collect, execute typed actions, undo, report | Go service, one signed binary per platform |
+| Data, sign-in, scheduling | Tenant-scoped storage with row-level security, append-only audit, SAML sign-in, queues and cron | Supabase (managed Postgres, Auth, Queues, Cron) |
+| Secrets | Anthropic key and signing key; per-tenant connector credentials | Hosting platform's runtime secrets; Supabase Vault |
 
-### 2.2 Why the AI loop runs on the server, not on the laptop
+### 2.2 Where it runs
+
+Nothing is hosted on the owner's laptop. The service is made of two managed pieces:
+
+1. **Supabase** for the database, sign-in, queues, scheduled jobs and the encrypted
+   credential store. This is the same platform Kiln uses, so the RLS-test pattern from
+   Kiln carries over.
+2. **One container on a managed host** for the Python service (API, connectors, triage,
+   investigation loop, agent gateway). Render is the suggested start because deploys are a
+   git push and secrets are managed for you; Fly.io, Google Cloud Run and Azure Container
+   Apps run the same container, so the choice is reversible.
+
+Why not Supabase alone, as in Kiln: Edge Functions are capped at 400 seconds of wall-clock
+time and 256 MB on paid plans (150 seconds on free). A triage call fits; a multi-step
+investigation that waits on an endpoint and on Claude does not, and neither does holding
+connections open for agents. Splitting the work into many short functions is possible but
+would make the security-critical loop harder to reason about and test.
+
+Expected starting cost is small: a paid Supabase project and one small always-on container,
+plus Claude usage, which will be the main variable cost. Check current prices before
+committing; none are quoted here because they change.
+
+For development the laptop needs nothing heavy: a separate cloud Supabase project serves as
+the development database, tests use a fixture model instead of Claude, and the API can be
+run as a single local process or developed entirely in cloud sessions.
+
+What Supabase covers for enterprise buyers, and what to confirm: it states SOC 2 Type 2
+compliance with the report available to Team and Enterprise customers, lets each project
+be placed in a chosen region, and supports SAML single sign-on. Which plan each of those
+requires was not confirmed from Supabase's own pricing pages; check before promising any
+of them to a customer. Under its shared-responsibility model, RLS policies, access
+management and application design remain ours.
+
+### 2.3 Why the AI loop runs on the server, not on the device
 
 The request was for the AI to "go through the laptop like Claude Cowork does". Cowork runs
 the agent on the user's machine with the user's own account. That model does not work
@@ -66,7 +100,7 @@ Agent SDK and Managed Agents were both considered and rejected for this piece: t
 SDK would need credentials on the device, and Managed Agents runs tools in an
 Anthropic-hosted sandbox rather than on the customer's machine.
 
-### 2.3 Endpoint action catalogue (first cut)
+### 2.4 Endpoint action catalogue (first cut)
 
 | Tier | Actions | Runs when |
 | --- | --- | --- |
@@ -84,18 +118,18 @@ machine, run antivirus scan, restrict app execution) through the Defender API ov
 agent doing the same thing. Our agent covers what Defender does not and customers without
 it.
 
-### 2.4 Multi-tenancy and identity
+### 2.5 Multi-tenancy and identity
 
 - One Postgres database, `tenant_id` on every tenant-scoped row, row-level security
   enforced for the application role. Per-tenant encryption keys for connector credentials.
-- Console sign-in by OIDC against the customer's identity provider (Entra first), SCIM for
-  provisioning later. Roles: Viewer, Analyst, Responder (may approve Tier 1), Admin (policy,
+- Console sign-in through Supabase Auth with SAML single sign-on against the customer's
+  identity provider (Entra first); SCIM provisioning later. Roles: Viewer, Analyst, Responder (may approve Tier 1), Admin (policy,
   connectors, may approve Tier 2).
 - Access to a customer's Microsoft data through one multi-tenant Entra application that the
   customer's admin consents to. Application permissions, certificate or federated
   credential, no stored user passwords.
 
-### 2.5 Using Claude
+### 2.6 Using Claude
 
 - Default model `claude-opus-5-5` from configuration, adaptive thinking, effort set per
   route. Whether high-volume triage should move to a cheaper model is a cost decision for
@@ -136,9 +170,10 @@ Microsoft Learn (the `microsoft-docs` skill) when the connector is written.
 Each phase ends with something that runs and a short list of checks that pass.
 
 **Phase 0 — Foundations (1–2 weeks).** Repo layout (`server/`, `web/`, `agent/`, `infra/`,
-`evals/`), tooling (uv, ruff, pyright, pytest, vitest), CI with pinned actions, Postgres
-with RLS and the cross-tenant test harness, Key Vault wiring, audit log table, fixture
-model, local development stack. *Done when:* CI is green and a test proves tenant A cannot
+`supabase/`, `evals/`), tooling (uv, ruff, pyright, pytest, vitest), CI with pinned actions
+and secret scanning, Supabase projects for development and production, RLS and the
+cross-tenant test harness, runtime secret wiring, audit log table, fixture model, first
+container deploy. *Done when:* CI is green and a test proves tenant A cannot
 read tenant B's rows through the API.
 
 **Phase 1 — First connector and triage (2–3 weeks).** Entra app registration and admin
@@ -147,7 +182,7 @@ triage with Claude (fenced prompt, structured output, severity floor, refusal ha
 usage metering. *Done when:* a test tenant's Defender alerts appear triaged, and injected
 text in an alert cannot lower its severity.
 
-**Phase 2 — Console and chat (2–3 weeks).** OIDC sign-in, roles, alert queue and detail,
+**Phase 2 — Console and chat (2–3 weeks).** SAML sign-in, roles, alert queue and detail,
 plain-English and analyst views, "Ask LightHouse" chat with streaming, triage eval set and
 harness. *Done when:* an analyst can work the queue end to end and the eval gives a
 baseline score to judge prompt and model changes against.
@@ -158,7 +193,7 @@ Sentinel, Microsoft 365 audit. Cross-source correlation by user and device. Post
 view joins evidence from at least three sources.
 
 **Phase 4 — Endpoint agent, observe only (3–4 weeks).** Agent enrolment with per-device
-certificates, gateway, signed envelopes, Tier 0 catalogue on Windows first, server-side
+keys, gateway, signed envelopes, Tier 0 catalogue on Windows first, server-side
 investigation loop, device view in the console. No actions that change anything. *Done
 when:* Claude can investigate a device through Tier 0 tools, and a forged or replayed
 envelope is rejected by the agent in tests.
@@ -182,7 +217,7 @@ alone make a useful read-only product that can be shown to design partners.
   server is worse than a missed alert. This is why Phase 4 ships observe-only, Tier 1
   defaults to approval, and there are blast-radius limits and a kill switch.
 - **We become a high-value target.** We hold read access to many companies' security data
-  and a channel to their endpoints. Signing keys, the agent update path and the gateway
+  and a channel to their endpoints. Signing keys, the Supabase secret key, the agent update path and the gateway
   need the most careful design and an outside review before Phase 5 ships.
 - **Prompt injection is the normal case.** Attackers control alert content. The severity
   floor, the fixed action catalogue and approvals are what make this safe; prompt wording
@@ -202,11 +237,11 @@ alone make a useful read-only product that can be shown to design partners.
 
 | # | Decision | Recommendation |
 | --- | --- | --- |
-| 1 | Endpoint agent language | Go: one signed static binary per platform, good service and cross-compile story. Alternative is Rust. Python is not suitable for a hardened agent. |
+| 1 | Endpoint agent language | **Decided: Go.** |
 | 2 | May Tier 1 containment ever run without a person in the first release? | No. Ship approval-only, then let tenants opt specific actions in once there is field data. |
-| 3 | Hosting | Azure, for customer fit and Marketplace. |
+| 3 | Hosting | **Decided: Supabase plus one managed container.** Still open: which container host. Render to start; revisit Azure Container Apps if Marketplace selling or a customer requires Azure. |
 | 4 | Billing channel | Azure Marketplace SaaS offer for enterprises (they can spend existing commitments), Stripe for direct. Price per protected user or device with a usage ceiling. |
 | 5 | Data residency and retention | Start US-only with a stated retention period; add an EU region when a customer requires it. |
 | 6 | High-volume triage model | Start on the default; decide on tiering after the Phase 2 eval shows what quality costs. |
 | 7 | Product name and relationship to the original | Keep "LightHouse Enterprise"; separate repo and brand tier, shared design language. |
-| 8 | Kiln-style Supabase backend vs. this stack | Not Supabase here. Enterprise buyers will expect Azure hosting, Key Vault-held secrets and a long-running agent gateway, which edge functions do not fit. The Kiln pattern (server holds the key, clients never do) is kept. |
+| 8 | Where the action-signing key lives by Phase 5 | A cloud key-management service that signs without releasing the key (Azure Key Vault, AWS KMS or Google Cloud KMS). The hosting platform's secret store is acceptable only while the agent is observe-only. |

@@ -45,7 +45,8 @@ the scaffolding; update the "Repo map" and "Commands" sections here when it land
 
 1. **Plan.** State what will change and what "done" means. For anything touching a security
    boundary (listed below), write the threat it must hold against.
-2. **Split by ownership.** One `coder` per area (`server/`, `web/`, `agent/`, `infra/`).
+2. **Split by ownership.** One `coder` per area (`server/`, `web/`, `agent/`, `supabase/`,
+   `infra/`).
    Two agents never edit the same lines. Run independent parts in parallel.
 3. **Brief fully.** Agents start with no context. Each brief includes the goal, the files it
    owns, the relevant rules from this file, the skills to load, and the checks that must pass.
@@ -65,23 +66,33 @@ the scaffolding; update the "Repo map" and "Commands" sections here when it land
 │ Entra ID, Intune, M365 │   (read; scoped    │ dedupe → triage → store      │──────────────▶ Claude
 │ other vendors (later)  │    write actions)  │                              │   (server-side key
 └────────────────────────┘                    │ Investigation loop (tool use)│    only)
-┌────────────────────────┐   mTLS, outbound   │ Policy + approvals + audit   │
+┌────────────────────────┐  HTTPS, outbound,  │ Policy + approvals + audit   │
 │ Endpoint agent (laptop │◀──────────────────▶│ API + web console            │
-│ or server): typed      │   signed action    │ Postgres (row-level security)│
-│ observe/contain tools  │   envelopes        └──────────────────────────────┘
+│ or server): typed      │  device-signed;    │ Postgres (row-level security)│
+│ observe/contain tools  │  signed actions    └──────────────────────────────┘
 └────────────────────────┘
 ```
 
-- **Control plane (`server/`):** Python 3.12, FastAPI, Pydantic v2, Postgres with row-level
-  security on every tenant-scoped table, a queue for ingestion and long-running work.
-- **Web console (`web/`):** React + TypeScript + Vite. Sign-in through the customer's
-  identity provider (OIDC, Entra first); no local passwords in production.
-- **Endpoint agent (`agent/`):** a small signed binary that runs as a service on Windows,
-  macOS and Linux. Recommended language is Go; confirm with the owner before Phase 4.
+Everything on the right is hosted on managed cloud services. Nothing runs on the owner's
+laptop except, optionally, one light API process during development.
+
+- **Data platform: Supabase** (managed). Postgres with row-level security on every
+  tenant-scoped table, Supabase Auth for console sign-in (SAML single sign-on per tenant,
+  Entra first; no local passwords in production), Supabase Queues and Cron for ingestion
+  scheduling, Supabase Vault for per-tenant connector credentials.
+- **Control plane (`server/`):** Python 3.12, FastAPI, Pydantic v2, packaged as one
+  container and run on a managed container host (Render to start; it is a plain container,
+  so moving to Azure Container Apps or Cloud Run later is a deployment change). It holds
+  the API, connectors, triage, the investigation loop and the agent gateway. It is not
+  built on Supabase Edge Functions: they stop at 400 seconds and 256 MB, which is too
+  tight for long investigations and agent connections.
+- **Web console (`web/`):** React + TypeScript + Vite, served as static files. It talks
+  only to our API, never to Claude and never to the database with elevated keys.
+- **Endpoint agent (`agent/`):** Go (decided). One signed static binary per platform,
+  running as a service on Windows, macOS and Linux. It makes outbound HTTPS calls only, so
+  no inbound port is opened on customer devices.
 - **AI:** the Anthropic Python SDK on the server only. The agent loop runs on the server;
   the endpoint agent only executes typed tool calls sent to it.
-- **Hosting:** Azure (Container Apps, Postgres Flexible Server, Key Vault, Service Bus),
-  because the customers are Microsoft shops and Azure Marketplace is the sales channel.
 
 ## Security rules (do not weaken)
 
@@ -89,12 +100,15 @@ This is a security product that holds read access to customers' security data an
 change their machines. These rules are the product. Ask the owner before relaxing any.
 
 1. **The Anthropic API key never leaves the server.** Not in the web bundle, not in the
-   endpoint agent, not in logs, not in a tenant-readable table. Secrets live in Key Vault
-   and are read with managed identity. Nothing secret is committed; `.env` files are ignored.
+   endpoint agent, not in the database, not in logs, not in a prompt. It exists only as a
+   runtime secret of the server container. See "Secrets" below for the full handling rules.
 2. **Tenant isolation is enforced by the database.** Every tenant-scoped table has an RLS
-   policy keyed on the request's tenant, and the application connects as a role that cannot
-   bypass it. A missing `WHERE tenant_id` must fail closed, not leak. Every new table ships
-   with a cross-tenant test.
+   policy keyed on the request's tenant, and request handling connects as a role that
+   cannot bypass it. A missing `WHERE tenant_id` must fail closed, not leak. Every new table
+   ships with a cross-tenant test. The Supabase `service_role` / secret key bypasses RLS:
+   it is used only by named background jobs on the server, never to serve a user request,
+   and never appears in the web console or the endpoint agent. Tenant and role claims used
+   in policies come from `app_metadata`, never from user-editable `user_metadata`.
 3. **Everything from a customer system is attacker-controlled.** Alert text, log lines,
    file names, process command lines, email subjects and endpoint tool results reach the
    model only as an allow-listed, length-capped projection inside `<untrusted_evidence>`
@@ -119,7 +133,10 @@ change their machines. These rules are the product. Ask the owner before relaxin
    - **Never:** deleting user data, wiping, reading credentials or secrets, disabling or
      uninstalling security tooling, or acting on protected targets (the agent itself, EDR,
      core OS processes, domain controllers).
-8. **Actions are signed.** The server signs each action (action, parameters, device, nonce,
+8. **Actions are signed, in both directions.** Each agent creates its own key pair at
+   enrolment (kept in the TPM or OS keychain where there is one) and signs every request,
+   so a stolen enrolment token or a copied config file cannot impersonate a device. The
+   server signs each action (action, parameters, device, nonce,
    expiry); the agent verifies the signature and its own local policy cap before acting. A
    device admin can lower the cap locally and the server cannot raise it. Every action has
    a dry-run mode and blast-radius limits (for example, a ceiling on hosts isolated per hour
@@ -138,6 +155,37 @@ change their machines. These rules are the product. Ask the owner before relaxin
 Security-boundary code, which always gets the extra review in step 4 of the loop: auth and
 sessions, tenant scoping, prompt construction, triage validation, the action catalogue,
 policy evaluation, signing and verification, connector credential handling.
+
+## Secrets
+
+There are four kinds of secret. Each has one home and is never copied anywhere else.
+
+| Secret | Lives in | Never in |
+| --- | --- | --- |
+| Anthropic API key | Runtime secret of the server container on the hosting platform | The repo, the web bundle, the agent, any database table, logs, prompts, chat with Claude |
+| Supabase secret (`service_role`) key and database password | Same runtime secret store | The web console, the agent, the repo |
+| Each customer's connector credentials (certificates, tokens) | Supabase Vault, encrypted, one entry per tenant, read only by the connector job for that tenant | Plain columns, logs, model prompts |
+| Action-signing private key | Runtime secret store at first; a cloud key-management service (the key never leaves it) before Phase 5 ships | Anywhere a developer or the database can read it |
+
+Rules for anyone, human or agent, working in this repo:
+
+- Never ask the owner to paste a key into a chat, and never write one into a file. Keys
+  are entered by the owner directly in the hosting platform's and Supabase's dashboards.
+- Separate keys for development and production, each in its own Anthropic workspace with
+  its own spend limit, so a leaked development key cannot run up the production bill or be
+  used at production scale.
+- Tests and local development use the fixture model and need no real key.
+- Only `.env.example` with placeholder values is committed. Secret scanning runs in a
+  pre-commit hook and in CI, and GitHub push protection stays on.
+- Log and error output is scrubbed of authorization headers and tokens; request bodies to
+  Claude are not logged in production.
+- Per-tenant and per-user rate limits and token quotas sit in front of every route that
+  calls Claude, so a stolen console session cannot spend the key without bound.
+- If a key may have been exposed: rotate it first, then investigate.
+
+Customer data follows the same care: collect only the fields the product uses, cap and
+project evidence before it reaches the model, keep a stated retention period with deletion
+on request, and encrypt in transit and at rest.
 
 ## Using the Claude API
 
@@ -180,7 +228,8 @@ Project skills are vendored in `.claude/skills/` (provenance and licences in
 | --- | --- |
 | Claude API code | `claude-api` (bundled with Claude Code) |
 | Server routes and models | `fastapi-router-py`, `pydantic-models-py`, `modern-python` |
-| Azure plumbing | `azure-identity-py`, `azure-keyvault-py`, `azure-servicebus-py`, `azure-eventhub-py`, `azure-monitor-query-py`, `azure-monitor-opentelemetry-py` |
+| Database, auth, RLS, migrations | `supabase`, `supabase-postgres-best-practices` |
+| Reading customers' Azure data | `azure-identity-py`, `azure-monitor-query-py`, `azure-eventhub-py`, `azure-keyvault-py` |
 | Tenant onboarding and consent | `entra-app-registration`, `entra-workload-identity`, `microsoft-docs` |
 | Connectors and detections | `defender-xdr`, `defender-for-endpoint`, `sentinel`, `sentinel-detection-engineering`, `unified-secops-platform`, `entra-id`, `entra-id-protection`, `intune-device-mgmt`, `purview-audit`, `kql` |
 | Endpoint agent actions | `windows-11-security-baseline`, `macos-intune-baseline`, `compromise-recovery`, `defender-tvm` |
@@ -204,7 +253,8 @@ docs/skills.md          Installed skills: source, commit, licence, why
 third_party/            Licences for vendored material
 ```
 
-Planned, not yet created: `server/`, `web/`, `agent/`, `infra/`, `evals/`.
+Planned, not yet created: `server/`, `web/`, `agent/`, `supabase/` (migrations and RLS
+tests), `infra/`, `evals/`.
 
 ## Commands
 
@@ -212,6 +262,6 @@ None yet. Phase 0 adds them; record the real commands here when they exist.
 
 ## Open decisions (ask the owner; do not decide silently)
 
-See `docs/PLAN.md` § Open decisions. The ones that block code: endpoint agent language,
-whether Tier 1 containment may ever run without approval in the first release, data
-retention and residency commitments, and the billing channel.
+See `docs/PLAN.md` § Open decisions. The ones that block code: whether Tier 1 containment
+may ever run without approval in the first release, data retention and residency
+commitments, and the billing channel.

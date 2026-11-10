@@ -1,7 +1,7 @@
 # Installed skills
 
 Vendored into `.claude/skills/` on 2026-11-10 so every session and every `coder` subagent
-has them without a marketplace install. 42 skills, about 2.5 MB. Licence texts are in
+has them without a marketplace install. 42 skills, about 2.6 MB. Licence texts are in
 `third_party/skill-licenses/`.
 
 Each skill was read for scope, and the set was scanned for embedded instructions aimed at
@@ -16,6 +16,7 @@ design). Skills are still third-party text: `CLAUDE.md` overrides them.
 | [anthropics/skills](https://github.com/anthropics/skills) | `2c5958e` | Apache-2.0 (these three) | First-party Anthropic |
 | [microsoft/skills](https://github.com/microsoft/skills) | `9287b44` | MIT | First-party Microsoft |
 | [microsoft/azure-skills](https://github.com/microsoft/azure-skills) | `9aa7f61` | MIT | First-party Microsoft |
+| [supabase/agent-skills](https://github.com/supabase/agent-skills) | `c9be0e9` | MIT | First-party Supabase |
 | [trailofbits/skills](https://github.com/trailofbits/skills) | `e4dd0bb` | CC BY-SA 4.0 | Established security firm |
 | [vinayaklatthe/microsoft-security-skills](https://github.com/vinayaklatthe/microsoft-security-skills) | `02e37e1` | MIT | Community repo (personal account, Microsoft copyright notice). Guidance text only, one `SKILL.md` each, no scripts. Verify specifics against Microsoft Learn. |
 
@@ -29,10 +30,10 @@ attribution here). It does not extend to LightHouse code written with their help
 | Skill | From | Used for |
 | --- | --- | --- |
 | `fastapi-router-py`, `pydantic-models-py` | microsoft/skills | API routes and boundary models |
-| `azure-identity-py`, `azure-keyvault-py` | microsoft/skills | Managed identity and secret handling |
-| `azure-servicebus-py`, `azure-eventhub-py` | microsoft/skills | Ingestion queue and streamed log intake |
-| `azure-monitor-query-py` | microsoft/skills | Querying Sentinel / Log Analytics workspaces |
-| `azure-monitor-opentelemetry-py` | microsoft/skills | Service telemetry |
+| `supabase`, `supabase-postgres-best-practices` | supabase/agent-skills | Database, RLS, Auth, Vault, queues, migrations |
+| `azure-identity-py`, `azure-monitor-query-py` | microsoft/skills | Authenticating to and querying a customer's Sentinel / Log Analytics workspace |
+| `azure-eventhub-py` | microsoft/skills | Streamed log intake from customers who export to Event Hubs |
+| `azure-keyvault-py` | microsoft/skills | Option for holding the action-signing key |
 | `kql` | microsoft/skills | Correct hunting and Sentinel queries |
 | `microsoft-docs` | microsoft/skills | Checking current Microsoft Learn docs instead of guessing |
 | `entra-app-registration` | microsoft/azure-skills | Multi-tenant app, consent and permissions |
@@ -64,6 +65,9 @@ Already available without vendoring: `claude-api` ships with Claude Code and mus
 before any code that calls Claude is written.
 
 ## Considered and not installed
+
+- **`azure-servicebus-py`, `azure-monitor-opentelemetry-py`**: installed at first, removed
+  when hosting moved from Azure to Supabase plus a container.
 
 - **mukul975/Anthropic-Cybersecurity-Skills** (800+ skills): too large to load usefully,
   unreviewed breadth, and not from Anthropic despite the name.
