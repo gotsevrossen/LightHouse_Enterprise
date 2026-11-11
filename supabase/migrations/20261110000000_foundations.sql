@@ -79,7 +79,7 @@ grant usage on schema lh to lh_app;
 -- Declaration order is the ordering Postgres uses for `<`/`>=` and `greatest()`, which is
 -- what the severity floor below relies on. Never reorder; only append above `critical`
 -- with care, and keep server/src/lighthouse/severity.py in the same order (a test checks).
-create type lh.severity as enum ('informational', 'low', 'medium', 'high', 'critical');
+create type lh.severity as enum ('info', 'low', 'medium', 'high', 'critical');
 
 create type lh.member_role as enum ('viewer', 'analyst', 'responder', 'admin');
 

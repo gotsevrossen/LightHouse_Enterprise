@@ -8,7 +8,13 @@ from lighthouse.audit import record_audit
 from lighthouse.auth import Principal, Role, require_role
 from lighthouse.db import Pool, get_pool, tenant_transaction
 from lighthouse.models import AuditEntryOut, AuditPage
-from lighthouse.pagination import InvalidCursorError, bad_cursor, decode_cursor, encode_cursor
+from lighthouse.pagination import (
+    MAX_PAGE_SIZE,
+    InvalidCursorError,
+    bad_cursor,
+    decode_cursor,
+    encode_cursor,
+)
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
@@ -35,7 +41,7 @@ LIST_AUDIT_AFTER_SQL: Final = """
 async def list_audit(
     principal: Annotated[Principal, Depends(require_role(Role.ADMIN))],
     pool: Annotated[Pool, Depends(get_pool)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
 ) -> AuditPage:
     after: tuple[object, int] | None = None

@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from lighthouse.auth import Principal, Role, require_role
 from lighthouse.db import Pool, Record, get_pool, tenant_transaction
 from lighthouse.models import AlertOut, AlertPage
-from lighthouse.pagination import InvalidCursorError, bad_cursor, decode_cursor, encode_cursor
+from lighthouse.pagination import (
+    MAX_PAGE_SIZE,
+    InvalidCursorError,
+    bad_cursor,
+    decode_cursor,
+    encode_cursor,
+)
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -49,7 +55,7 @@ def _to_alert(row: Record) -> AlertOut:
 async def list_alerts(
     principal: Annotated[Principal, Depends(require_role(Role.VIEWER))],
     pool: Annotated[Pool, Depends(get_pool)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = 50,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
 ) -> AlertPage:
     after: tuple[object, UUID] | None = None

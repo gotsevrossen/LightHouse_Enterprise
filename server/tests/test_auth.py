@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from typing import Any
 from uuid import uuid4
 
@@ -280,7 +281,7 @@ def test_jwks_unknown_kid_is_rejected(factory: TokenFactory) -> None:
 
 
 def test_jwks_symmetric_key_cannot_be_used(factory: TokenFactory) -> None:
-    secret = b"example-shared-secret-for-tests-only-0123456789"
+    secret = secrets.token_bytes(32)
     oct_jwk = json.loads(jwt.algorithms.HMACAlgorithm.to_jwk(secret))
     oct_jwk.update({"kid": "oct-key", "alg": "HS256"})
     verifier = _jwks_verifier({"keys": [_jwk(factory), oct_jwk]})
@@ -347,7 +348,9 @@ def test_build_verifier_from_settings(factory: TokenFactory) -> None:
 def test_settings_read_from_lh_environment(
     monkeypatch: pytest.MonkeyPatch, factory: TokenFactory
 ) -> None:
-    monkeypatch.setenv("LH_DATABASE_URL", "postgresql://user:placeholder-pw@db.invalid/db")
+    password = secrets.token_hex(12)
+    # Assembled at run time so no credential-shaped URL literal sits in the source.
+    monkeypatch.setenv("LH_DATABASE_URL", "postgresql://user:" + password + "@db.invalid/db")
     monkeypatch.setenv("LH_JWT_ISSUER", TEST_ISSUER)
     monkeypatch.setenv("LH_JWT_PUBLIC_KEY", factory.public_pem)
     monkeypatch.setenv("LH_DEV", "1")
@@ -355,4 +358,4 @@ def test_settings_read_from_lh_environment(
     assert settings.dev is True
     assert settings.database_url.get_secret_value().endswith("@db.invalid/db")
     # The URL carries the database password; it must not appear in reprs or logs.
-    assert "placeholder-pw" not in repr(settings)
+    assert password not in repr(settings)

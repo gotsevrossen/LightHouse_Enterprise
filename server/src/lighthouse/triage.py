@@ -6,7 +6,7 @@ Security boundary: triage validation. The rules this module carries (CLAUDE.md 4
 - any failure (exception, timeout, invalid output) becomes the same "needs human review"
   result, and ingestion carries on;
 - stored severity is `max(source severity, model severity)`: prompt-injected alert text
-  can make the model say "informational", but cannot lower what is stored.
+  can make the model say "info", but cannot lower what is stored.
 """
 
 from __future__ import annotations

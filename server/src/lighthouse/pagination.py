@@ -14,6 +14,8 @@ from typing import Final
 
 from fastapi import HTTPException, status
 
+# Matches the web console's upper bound for `limit`.
+MAX_PAGE_SIZE: Final = 200
 MAX_CURSOR_LENGTH: Final = 200
 _SEPARATOR: Final = "|"
 

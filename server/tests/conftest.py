@@ -28,6 +28,7 @@ import pytest
 from pydantic import SecretStr
 
 from lighthouse.config import Settings
+from lighthouse.db import Pool, create_pool
 from lighthouse.main import create_app
 from tests.helpers import TEST_AUDIENCE, TEST_ISSUER, TokenFactory
 
@@ -263,6 +264,15 @@ def settings(test_database: TestDatabase, tokens: TokenFactory) -> Settings:
         db_pool_min_size=1,
         db_pool_max_size=4,
     )
+
+
+@pytest.fixture
+async def app_pool(settings: Settings) -> AsyncGenerator[Pool]:
+    pool = await create_pool(settings)
+    try:
+        yield pool
+    finally:
+        await pool.close()
 
 
 @pytest.fixture

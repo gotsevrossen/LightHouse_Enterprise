@@ -266,7 +266,7 @@ async def test_audit_log_trigger_blocks_even_superuser(superuser: Conn, statemen
 
 @pytest.mark.parametrize(
     ("source", "stored"),
-    [("high", "medium"), ("critical", "informational"), ("low", "informational")],
+    [("high", "medium"), ("critical", "info"), ("low", "info")],
 )
 async def test_severity_floor_rejects_lower_severity(
     superuser: Conn, app_conn: Conn, source: str, stored: str

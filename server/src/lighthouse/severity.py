@@ -12,7 +12,7 @@ class Severity(Enum):
     A test compares the two.
     """
 
-    INFORMATIONAL = "informational"
+    INFO = "info"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
