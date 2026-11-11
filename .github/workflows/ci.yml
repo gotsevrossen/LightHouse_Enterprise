@@ -1,0 +1,263 @@
+# CI for LightHouse Enterprise.
+#
+# Security posture (see CLAUDE.md, rule 12 and "Secrets"):
+# - Triggered by `pull_request` and pushes to `main` only. Never `pull_request_target`
+#   or `workflow_run`: those run fork code with the base repository's token and cache.
+# - The token is read-only for every job (top-level `permissions`), checkout does not
+#   persist it into .git/config, and no job uses any repository secret. In particular
+#   CI never needs the Anthropic API key: server tests use the fixture model.
+# - Every third-party action is pinned to a full commit SHA (version in the trailing
+#   comment, verified against the tag with `git ls-remote`). Tools fetched at run time
+#   (uv, gitleaks, pip-audit) are pinned and integrity-checked.
+# - No `${{ github.event.* }}` value is expanded inside a `run:` script. Values a job
+#   needs are passed through `env:` and read as quoted shell variables.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# PR runs cancel the superseded run for the same PR. Pushes to main are grouped by
+# commit SHA, so every commit that lands on main gets a complete run.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Exact uv release. setup-uv verifies the download against the checksum table built
+  # into the pinned action commit (0.13.5 is in that table).
+  UV_VERSION: "0.13.5"
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+
+jobs:
+  server:
+    name: server (ruff, pyright, pytest)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        # Pinned by the multi-arch index digest of the official postgres:16.15 image.
+        # Dependabot does not update service-container digests; bump it by hand.
+        image: postgres:16.15@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+        env:
+          # Throwaway container that lives only for this job on an ephemeral runner.
+          # The image's well-known default credentials, not a secret; .gitleaks.toml
+          # allowlists exactly this loopback URL and nothing broader.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Superuser URL of an empty server: the test suite creates and drops what it needs.
+      LH_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: server/uv.lock
+
+      # `uv sync --frozen` installs exactly what uv.lock says without checking that the
+      # lock still matches pyproject.toml. Check that first, so a dependency change
+      # without a lock update fails here instead of silently testing the old lock.
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
+      - name: Install (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run --frozen ruff check .
+
+      - name: Ruff format check
+        run: uv run --frozen ruff format --check .
+
+      - name: Pyright
+        run: uv run --frozen pyright
+
+      - name: Pytest
+        run: uv run --frozen pytest
+
+  web:
+    name: web (lint, build, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # `npm ci` fails if package.json and package-lock.json disagree.
+      - name: Install (lockfile)
+        run: npm ci
+
+      # Verifies npm registry signatures (and provenance attestations where present) of
+      # every installed package, so a tampered tarball fails the build.
+      - name: Verify registry signatures
+        run: npm audit signatures
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  secrets:
+    name: secrets (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # The gitleaks GitHub Action needs a paid licence for organisation repositories,
+      # so the release binary is downloaded and checked against the SHA-256 published in
+      # gitleaks_8.30.1_checksums.txt on the v8.30.1 release.
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - name: Check out (full history)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/gitleaks"
+          mkdir -p "${dir}"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            --retry 3 --output "${dir}/gitleaks.tar.gz" "${url}"
+          echo "${GITLEAKS_SHA256}  ${dir}/gitleaks.tar.gz" | sha256sum --check --strict -
+          tar -xzf "${dir}/gitleaks.tar.gz" -C "${dir}" gitleaks
+          "${dir}/gitleaks" version
+          echo "${dir}" >> "${GITHUB_PATH}"
+
+      # Pull requests: scan every commit the PR adds (base..head), not only the final
+      # diff, so a secret added and then removed inside the PR is still caught.
+      #
+      # The scan uses the base branch's .gitleaks.toml and .gitleaksignore, never the
+      # PR's own copies, so a PR cannot loosen the rules that judge it. Changes to the
+      # scanner config take effect only after they are reviewed and merged. If the base
+      # has no config yet, the built-in default rules are used.
+      - name: Scan pull request commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          cfg="${RUNNER_TEMP}/gitleaks-base.toml"
+          ignore="${RUNNER_TEMP}/gitleaks-base.ignore"
+          if git cat-file -e "${BASE_SHA}:.gitleaks.toml" 2>/dev/null; then
+            git show "${BASE_SHA}:.gitleaks.toml" > "${cfg}"
+          else
+            printf '[extend]\nuseDefault = true\n' > "${cfg}"
+          fi
+          if git cat-file -e "${BASE_SHA}:.gitleaksignore" 2>/dev/null; then
+            git show "${BASE_SHA}:.gitleaksignore" > "${ignore}"
+          else
+            : > "${ignore}"
+          fi
+          gitleaks git \
+            --config "${cfg}" \
+            --gitleaks-ignore-path "${ignore}" \
+            --log-opts="${BASE_SHA}..${HEAD_SHA}" \
+            --redact --no-banner --verbose \
+            .
+
+      # Pushes to main: scan the entire history with the merged (reviewed) config.
+      - name: Scan full history
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          gitleaks git --config .gitleaks.toml --redact --no-banner --verbose .
+
+  deps:
+    name: deps (advisories)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Why not actions/dependency-review-action: on private repositories it needs GitHub
+    # Advanced Security (paid). These checks use public advisory APIs with no token:
+    # pip-audit queries the PyPI vulnerability API for the exact versions in
+    # server/uv.lock, and npm audit queries the npm registry advisory endpoint for the
+    # versions in web/package-lock.json.
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            server/uv.lock
+            .github/tools/pip-audit/uv.lock
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Export every locked server dependency (all groups and extras, so dev and test
+      # tools are covered too) as a hashed requirements file, then audit those exact
+      # versions. --disable-pip: no resolution happens, only the pinned set is checked.
+      # --strict: a dependency that cannot be audited fails the job instead of being
+      # skipped. pip-audit itself comes from the hash-locked project in
+      # .github/tools/pip-audit, installed outside the checkout.
+      - name: Python advisories (pip-audit)
+        run: |
+          set -euo pipefail
+          req="${RUNNER_TEMP}/server-requirements.txt"
+          uv export --directory server --frozen --format requirements.txt \
+            --all-groups --all-extras --no-emit-workspace --output-file "${req}"
+          UV_PROJECT_ENVIRONMENT="${RUNNER_TEMP}/pip-audit-venv" \
+            uv run --frozen --project .github/tools/pip-audit -- \
+            pip-audit --requirement "${req}" --disable-pip --strict --progress-spinner off
+
+      - name: npm advisories (high and critical)
+        working-directory: web
+        run: npm audit --audit-level=high

@@ -1,0 +1,62 @@
+# Dependabot version updates. Weekly, grouped so minor and patch bumps arrive as one PR
+# per ecosystem; major bumps come separately because they need a real review.
+#
+# `cooldown` waits before proposing a freshly published release, so a compromised or
+# broken release has time to be noticed and yanked upstream before it reaches a PR.
+# Security updates (from Dependabot alerts) are not delayed by it.
+#
+# Not covered here, update by hand: the postgres service-container digest in
+# .github/workflows/ci.yml, the gitleaks version and checksum in the same file, the uv
+# version (UV_VERSION) and the revs in .pre-commit-config.yaml.
+
+version: 2
+
+updates:
+  - package-ecosystem: uv
+    directory: /server
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      server-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The hash-locked pip-audit used by the CI `deps` job.
+  - package-ecosystem: uv
+    directory: /.github/tools/pip-audit
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      ci-tools:
+        patterns: ["*"]

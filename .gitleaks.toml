@@ -1,0 +1,96 @@
+# gitleaks configuration for LightHouse Enterprise.
+#
+# Used by the pre-commit hook (gitleaks reads ./.gitleaks.toml automatically) and by
+# the `secrets` job in .github/workflows/ci.yml. In CI, pull requests are scanned with
+# the BASE branch's copy of this file, so edits here only take effect once merged.
+#
+# Rules of the road (CLAUDE.md, "Secrets"):
+# - Extend the default rule set; never disable a default rule to silence a finding.
+# - A false positive is fixed with the narrowest allowlist that works: scoped to one
+#   rule, matching an exact value or path, with a comment saying why it is safe.
+# - A real secret that reached git history is rotated first. Only after rotation may its
+#   fingerprint be added to .gitleaksignore, with a note on when it was rotated.
+#
+# Deliberately absent: a path allowlist for .claude/skills/. The vendored skills were
+# scanned with this config (default + custom rules, working tree and full history) and
+# produce no findings, so excluding them would only create a place where a real secret
+# could be committed unseen. If a vendored document ever trips a rule, add a
+# [[allowlists]] entry with `targetRules = ["<that rule>"]` and `paths` naming that one
+# file, not the whole directory.
+
+title = "LightHouse Enterprise gitleaks config"
+minVersion = "v8.25.0"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Anthropic
+# ---------------------------------------------------------------------------
+# The default rules match only the exact current shape of API (`sk-ant-api03-`) and
+# Admin (`sk-ant-admin01-`) keys: 93 characters ending in "AA". This rule catches any
+# `sk-ant-<kind><NN>-` credential, including other kinds (for example OAuth tokens) and
+# future versions or lengths. The entropy floor skips obvious "xxxx" placeholders.
+[[rules]]
+id = "lighthouse-anthropic-credential"
+description = "Anthropic credential (any sk-ant-<kind><NN>- token). Rotate in the Anthropic Console, then investigate."
+regex = '''\b(sk-ant-[a-z]{2,12}\d{2}-[A-Za-z0-9_\-]{20,})'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["sk-ant-"]
+
+# ---------------------------------------------------------------------------
+# Supabase (the default rules have none)
+# ---------------------------------------------------------------------------
+# Secret API key (new format). Bypasses row-level security: server background jobs only.
+# Publishable keys (`sb_publishable_`) are public by design and intentionally not matched.
+[[rules]]
+id = "lighthouse-supabase-secret-key"
+description = "Supabase secret API key (sb_secret_). Bypasses RLS. Rotate in the Supabase dashboard."
+regex = '''\b(sb_secret_[A-Za-z0-9_\-]{20,})'''
+secretGroup = 1
+entropy = 3.0
+keywords = ["sb_secret_"]
+
+# Legacy `service_role` JWT. The default `jwt` rule already flags any JWT; this rule
+# names the dangerous case explicitly. The payload is base64url, so "service_role"
+# appears as one of three fragments depending on its byte alignment.
+[[rules]]
+id = "lighthouse-supabase-service-role-jwt"
+description = "Supabase legacy service_role JWT. Bypasses RLS. Rotate the JWT secret / keys in the Supabase dashboard."
+regex = '''\b(eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]*?(?:c2VydmljZV9yb2xl|NlcnZpY2Vfcm9s|zZXJ2aWNlX3Jv)[A-Za-z0-9_\-]*\.[A-Za-z0-9_\-]{20,})'''
+secretGroup = 1
+keywords = ["c2vydmljzv9yb2xl", "nlcnzpy2vfcm9s", "zxj2awnlx3jv"]
+
+# Personal access token for the Supabase Management API (full control of projects).
+[[rules]]
+id = "lighthouse-supabase-access-token"
+description = "Supabase personal access token (sbp_). Revoke in the Supabase account settings."
+regex = '''\b(sbp_[a-f0-9]{40})\b'''
+secretGroup = 1
+keywords = ["sbp_"]
+
+# ---------------------------------------------------------------------------
+# Postgres connection strings with an inline password
+# ---------------------------------------------------------------------------
+# The Supabase database password usually leaks as part of a connection string, which
+# no default rule covers.
+[[rules]]
+id = "lighthouse-postgres-url-password"
+description = "Postgres connection string with an inline password. Rotate the database password."
+regex = '''\bpostgres(?:ql)?(?:\+[a-z0-9]+)?://[^:@/\s'"`]+:([^@/\s'"`]{4,})@[^\s'"`/?#]+'''
+secretGroup = 1
+keywords = ["postgres"]
+
+# The official postgres image's well-known default credentials on loopback only: the
+# throwaway service container in CI and the Supabase CLI's local stack. This exact
+# value is not a secret. Any other user, password or host is still reported.
+[[rules.allowlists]]
+description = "postgres:postgres on localhost/127.0.0.1 (CI service container, local dev)"
+regexTarget = "match"
+regexes = ['''^postgres(?:ql)?://postgres:postgres@(?:localhost|127\.0\.0\.1)(?::\d+)?$''']
+
+# Documentation placeholders such as `<password>` in .env.example.
+[[rules.allowlists]]
+description = "Angle-bracket placeholder in place of the password"
+regexes = ['''^<[a-z0-9_\-]+>$''']
