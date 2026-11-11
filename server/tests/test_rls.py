@@ -154,9 +154,7 @@ async def test_tenant_a_cannot_move_a_row_into_tenant_b(superuser: Conn, app_con
             )
 
 
-async def test_update_policy_with_check_alone_blocks_moving_rows(
-    superuser: Conn, app_conn: Conn
-) -> None:
+async def test_update_policy_with_check_alone_blocks_moving_rows(superuser: Conn) -> None:
     """Prove the policy itself holds, independent of the trigger that also blocks it."""
     tenant_a, tenant_b, alert_a, _ = await _seed_pair(superuser)
     # Disable the trigger in one transaction on the superuser connection; lh_app runs on
@@ -328,7 +326,9 @@ async def test_updated_at_is_maintained(superuser: Conn) -> None:
     tenant = await create_tenant(superuser)
     alert = await create_alert(superuser, tenant)
     await superuser.execute("update lh.alerts set updated_at = 'epoch' where id = $1", alert)
-    row = await superuser.fetchrow("select created_at, updated_at from lh.alerts where id = $1", alert)
+    row = await superuser.fetchrow(
+        "select created_at, updated_at from lh.alerts where id = $1", alert
+    )
     assert row is not None
     assert row["updated_at"] >= row["created_at"]
 
@@ -412,9 +412,7 @@ async def test_connection_user_without_set_role_has_no_access(app_conn: Conn) ->
 
 async def test_python_enums_match_database_enums(superuser: Conn) -> None:
     async def labels(type_name: str) -> list[str]:
-        return await superuser.fetchval(
-            f"select enum_range(null::lh.{type_name})::text[]"  # noqa: S608
-        )
+        return await superuser.fetchval(f"select enum_range(null::lh.{type_name})::text[]")
 
     assert await labels("severity") == [s.value for s in Severity]
     assert await labels("member_role") == [r.value for r in Role]

@@ -43,12 +43,18 @@ async def test_record_audit_rolls_back_with_the_callers_transaction(
 ) -> None:
     tenant = await create_tenant(superuser)
     action = f"test.{uuid4()}"
-    with pytest.raises(RuntimeError, match="boom"):
+
+    async def audited_change_that_fails() -> None:
         async with tenant_transaction(app_pool, tenant) as conn:
             await record_audit(conn, actor="user:example", action=action)
             msg = "boom"
             raise RuntimeError(msg)
-    assert await superuser.fetchval("select count(*) from lh.audit_log where action = $1", action) == 0
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await audited_change_that_fails()
+    assert (
+        await superuser.fetchval("select count(*) from lh.audit_log where action = $1", action) == 0
+    )
 
 
 async def test_record_audit_refuses_outside_a_transaction(app_conn: Conn) -> None:

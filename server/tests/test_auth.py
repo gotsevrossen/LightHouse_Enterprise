@@ -11,6 +11,8 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from jwt.algorithms import ECAlgorithm, HMACAlgorithm
+from jwt.utils import base64url_encode
 from pydantic import SecretStr, ValidationError
 
 from lighthouse.auth import (
@@ -136,16 +138,15 @@ def test_rs256_with_rsa_key_is_accepted(factory: TokenFactory) -> None:
         .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         .decode()
     )
-    verifier = JwtTokenVerifier(
-        StaticKeyResolver(pem), issuer=TEST_ISSUER, audience=TEST_AUDIENCE
-    )
+    verifier = JwtTokenVerifier(StaticKeyResolver(pem), issuer=TEST_ISSUER, audience=TEST_AUDIENCE)
     tenant_id = uuid4()
     token = jwt.encode(factory.claims(tenant_id=tenant_id), rsa_key, algorithm="RS256")
     assert verifier.verify(token).tenant_id == tenant_id
 
 
 def test_weak_or_unsupported_static_keys_are_refused() -> None:
-    small_rsa = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    # Deliberately weak: the verifier must refuse it.
+    small_rsa = rsa.generate_private_key(public_exponent=65537, key_size=1024)  # noqa: S505
     pem = (
         small_rsa.public_key()
         .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -255,9 +256,7 @@ class _OfflineJwksClient(jwt.PyJWKClient):
 
 
 def _jwk(factory: TokenFactory) -> dict[str, Any]:
-    jwk: dict[str, Any] = json.loads(
-        jwt.algorithms.ECAlgorithm.to_jwk(factory.private_key.public_key())
-    )
+    jwk: dict[str, Any] = json.loads(ECAlgorithm.to_jwk(factory.private_key.public_key()))
     jwk.update({"kid": factory.kid, "alg": "ES256", "use": "sig"})
     return jwk
 
@@ -282,7 +281,7 @@ def test_jwks_unknown_kid_is_rejected(factory: TokenFactory) -> None:
 
 def test_jwks_symmetric_key_cannot_be_used(factory: TokenFactory) -> None:
     secret = secrets.token_bytes(32)
-    oct_jwk = json.loads(jwt.algorithms.HMACAlgorithm.to_jwk(secret))
+    oct_jwk = json.loads(HMACAlgorithm.to_jwk(secret))
     oct_jwk.update({"kid": "oct-key", "alg": "HS256"})
     verifier = _jwks_verifier({"keys": [_jwk(factory), oct_jwk]})
     claims = factory.claims(tenant_id=uuid4())
@@ -292,7 +291,7 @@ def test_jwks_symmetric_key_cannot_be_used(factory: TokenFactory) -> None:
     # Same, but the header claims an allowed algorithm: the key's own type must still
     # disqualify it.
     _, payload, signature = token.split(".")
-    es_header_with_kid = jwt.utils.base64url_encode(
+    es_header_with_kid = base64url_encode(
         json.dumps({"alg": "ES256", "typ": "JWT", "kid": "oct-key"}).encode()
     ).decode()
     with pytest.raises(AuthenticationError):

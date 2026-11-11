@@ -52,6 +52,8 @@ ignore = [
     "S603",    # tests start a local postgres with fixed argument lists
     "S607",
     "INP001",
+    "ANN401",  # JWT claim dicts are untyped JSON by nature
+    "PLR0913", # seed helpers take one keyword per column
 ]
 
 [tool.ruff.lint.flake8-bugbear]

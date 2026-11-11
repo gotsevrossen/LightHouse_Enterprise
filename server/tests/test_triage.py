@@ -47,7 +47,8 @@ def test_severity_order_is_by_rank_not_alphabet() -> None:
         Severity.HIGH,
         Severity.CRITICAL,
     ]
-    assert sorted(reversed(ordered)) == ordered
+    shuffled = [Severity.HIGH, Severity.INFO, Severity.CRITICAL, Severity.LOW, Severity.MEDIUM]
+    assert sorted(shuffled) == ordered
     # Alphabetically "critical" < "high"; by severity it must be the other way round.
     assert Severity.CRITICAL > Severity.HIGH
     assert Severity.LOW < Severity.MEDIUM
@@ -61,9 +62,7 @@ def test_severity_does_not_compare_with_strings() -> None:
         _ = Severity.HIGH < "critical"  # pyright: ignore[reportOperatorIssue]
 
 
-@pytest.mark.parametrize(
-    ("source", "model"), list(itertools.product(list(Severity), repeat=2))
-)
+@pytest.mark.parametrize(("source", "model"), list(itertools.product(list(Severity), repeat=2)))
 def test_apply_source_floor_is_the_maximum(source: Severity, model: Severity) -> None:
     floored = apply_source_floor(source, model)
     assert floored >= source

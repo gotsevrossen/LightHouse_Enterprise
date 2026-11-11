@@ -176,6 +176,19 @@ cross-tenant test harness, runtime secret wiring, audit log table, fixture model
 container deploy. *Done when:* CI is green and a test proves tenant A cannot
 read tenant B's rows through the API.
 
+*Phase 0 status (2026-11-11):* code complete and verified locally (server: 162 tests,
+lint, format and strict type-check clean; web: 65 tests, lint and build clean). Carried
+forward:
+
+- Apply the migration to a real Supabase development project and confirm the role grant
+  works for Supabase's non-superuser `postgres`; create the `noinherit` login role.
+- First run of the CI workflow on GitHub, and the first container build and deploy.
+- Sign-in trusts the token's tenant and role until it expires; a removed user keeps access
+  for the token's lifetime. Add a membership check against the database, or short token
+  lifetimes plus session revocation, in Phase 2 with real sign-in.
+- The console and API are assumed same-origin in production (Vite proxy in development).
+  If they are ever split across origins, add an explicit CORS allow-list, never a wildcard.
+
 **Phase 1 — First connector and triage (2–3 weeks).** Entra app registration and admin
 consent flow, Defender XDR incidents and alerts connector, normalised alert schema, dedupe,
 triage with Claude (fenced prompt, structured output, severity floor, refusal handling),

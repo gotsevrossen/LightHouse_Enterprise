@@ -142,7 +142,9 @@ async def test_me_returns_principal(
     }
 
 
-async def test_me_for_unknown_tenant_is_403(client: httpx.AsyncClient, tokens: TokenFactory) -> None:
+async def test_me_for_unknown_tenant_is_403(
+    client: httpx.AsyncClient, tokens: TokenFactory
+) -> None:
     response = await client.get("/api/me", headers=bearer(tokens.token(uuid4())))
     assert response.status_code == 403
 
@@ -331,4 +333,3 @@ async def test_server_refuses_to_start_without_forced_rls(
             await create_pool(settings)
     finally:
         await superuser.execute("alter table lh.alerts force row level security")
-

@@ -22,9 +22,11 @@ not. Three things are deliberately the opposite of the original:
 
 ## Status
 
-Planning only. No application code exists yet. Do not assume a file, command or table in
-this document exists until you have seen it in the repo. Phase 0 in `docs/PLAN.md` creates
-the scaffolding; update the "Repo map" and "Commands" sections here when it lands.
+Phase 0 (foundations) is built: the server skeleton with sign-in token checks and
+tenant-scoped reads, the first database migration with row-level security, the web console
+scaffold, and CI with secret scanning. Nothing is deployed, the CI workflow has not yet run
+on GitHub, and the migration has not yet been applied to a real Supabase project. No code
+calls Claude yet; that starts in Phase 1. The endpoint agent (`agent/`) does not exist yet.
 
 ## How work is done here: model roles (required)
 
@@ -251,14 +253,47 @@ docs/skills.md          Installed skills: source, commit, licence, why
 .claude/settings.json   Project default model (Fable 5.2 orchestrator)
 .claude/skills/         Vendored skills
 third_party/            Licences for vendored material
+server/                 FastAPI control plane (src/lighthouse, tests, Dockerfile)
+  src/lighthouse/auth.py    Token verification and role checks (security boundary)
+  src/lighthouse/db.py      tenant_transaction: every user query runs through it (security boundary)
+  src/lighthouse/triage.py  TriageResult, TriageModel interface, fixture model, severity floor
+supabase/migrations/    SQL migrations; tables live in the `lh` schema, not `public`
+web/                    React + TypeScript console scaffold
+.github/                CI workflow, Dependabot, pinned pip-audit tool
+.gitleaks.toml, .pre-commit-config.yaml, .env.example   Secret scanning and placeholders
 ```
 
-Planned, not yet created: `server/`, `web/`, `agent/`, `supabase/` (migrations and RLS
-tests), `infra/`, `evals/`.
+Planned, not yet created: `agent/`, `infra/`, `evals/`.
 
 ## Commands
 
-None yet. Phase 0 adds them; record the real commands here when they exist.
+```sh
+# Server (from server/). Tests need PostgreSQL 16: local binaries, or LH_TEST_DATABASE_URL.
+uv lock --check && uv sync --frozen && uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest
+
+# Web console (from web/)
+npm ci && npm run lint && npm run build && npm test
+
+# Secret-scanning hook (once per clone)
+uv tool install pre-commit && pre-commit install
+```
+
+Details are in `server/README.md` and `web/README.md`.
+
+## Database conventions (established in Phase 0)
+
+- All tables are in the `lh` schema, never `public`, so the Supabase Data API does not
+  expose them. New tables follow the same pattern: RLS enabled and forced, policies for
+  role `lh_app` keyed on `lh.current_tenant_id()`, no grants to `anon` or `authenticated`.
+- User requests reach the database only through `db.tenant_transaction`. Route SQL does
+  not filter by tenant; the database does. Always use bind parameters: the tenant is a
+  transaction setting, so SQL injection as `lh_app` would be a cross-tenant break.
+- `alerts.source_severity` can only rise and `severity >= source_severity` is a table
+  constraint, so connectors must not lower a source severity on re-ingestion.
+- The server refuses to start if `lh_app` could bypass RLS or any `lh` table lacks forced
+  RLS. Do not remove that check.
+- Never commit a JWT-shaped or key-shaped literal, even a fake one, in code or tests;
+  build them at run time (see `web/src/test/tokens.ts` and `server/tests/helpers.py`).
 
 ## Open decisions (ask the owner; do not decide silently)
 

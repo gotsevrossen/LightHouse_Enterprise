@@ -1,0 +1,17 @@
+# Only pyproject.toml, uv.lock and src/ are needed to build the image. Keep local state,
+# tests and anything that could hold a secret out of the build context.
+.venv
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+tests
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+Dockerfile
+.dockerignore
+README.md

@@ -118,7 +118,17 @@ def pg_server() -> Iterator[PgServer]:
         # is reachable only from this machine and this test run.
         options = f"-k {tmp} -c listen_addresses='' -p {SOCKET_PORT} -c fsync=off"
         _run_pg(
-            [_pg_bin("pg_ctl"), "-D", str(data), "-l", str(tmp / "log"), "-o", options, "-w", "start"],
+            [
+                _pg_bin("pg_ctl"),
+                "-D",
+                str(data),
+                "-l",
+                str(tmp / "log"),
+                "-o",
+                options,
+                "-w",
+                "start",
+            ],
             as_postgres=as_postgres,
         )
         yield PgServer(base_url=None, socket_dir=tmp)
@@ -199,7 +209,7 @@ async def _setup_database(server: PgServer, name: str, scratch: str) -> str:
 
     db = await asyncpg.connect(server.dsn(name))
     try:
-        await db.execute(f"grant connect on database \"{name}\" to {API_LOGIN_ROLE}")
+        await db.execute(f'grant connect on database "{name}" to {API_LOGIN_ROLE}')
         await db.execute(f"grant lh_app to {API_LOGIN_ROLE}")
     finally:
         await db.close()
@@ -230,7 +240,9 @@ def test_database(pg_server: PgServer) -> Iterator[TestDatabase]:
 
 
 @pytest.fixture
-async def superuser(test_database: TestDatabase) -> AsyncGenerator[asyncpg.Connection[asyncpg.Record]]:
+async def superuser(
+    test_database: TestDatabase,
+) -> AsyncGenerator[asyncpg.Connection[asyncpg.Record]]:
     """A superuser connection. Superusers bypass RLS: use it only to seed and to inspect."""
     conn = await asyncpg.connect(test_database.superuser_dsn)
     try:
@@ -240,7 +252,9 @@ async def superuser(test_database: TestDatabase) -> AsyncGenerator[asyncpg.Conne
 
 
 @pytest.fixture
-async def app_conn(test_database: TestDatabase) -> AsyncGenerator[asyncpg.Connection[asyncpg.Record]]:
+async def app_conn(
+    test_database: TestDatabase,
+) -> AsyncGenerator[asyncpg.Connection[asyncpg.Record]]:
     """A connection as the API's login role (not a superuser, member of lh_app)."""
     conn = await asyncpg.connect(test_database.app_dsn)
     try:
