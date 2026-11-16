@@ -80,7 +80,7 @@ def usage_from(message: BetaMessage) -> TriageUsage:
     )
 
 
-def _model_name(value: str, fallback: str) -> str:
+def model_name(value: str, fallback: str) -> str:
     # The served model id comes from the response; bound it before it is stored.
     if 1 <= len(value) <= MAX_MODEL_NAME_CHARS:
         return value
@@ -155,7 +155,7 @@ class AnthropicTriageModel:
                 source, reason=ReviewReason.API_ERROR, usage=TriageUsage(), model=configured
             )
         usage = usage_from(message)
-        served = _model_name(message.model, configured)
+        served = model_name(message.model, configured)
         output = _read_output(message)
         if isinstance(output, ReviewReason):
             return needs_human_review_result(source, reason=output, usage=usage, model=served)

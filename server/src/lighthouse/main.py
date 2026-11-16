@@ -11,14 +11,23 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 
+from lighthouse.ai.chat_model import build_chat_model
 from lighthouse.auth import TokenVerifier, build_verifier
+from lighthouse.chat import ChatModel
 from lighthouse.config import Settings, load_settings
 from lighthouse.db import create_pool
-from lighthouse.routes import alerts, audit, health, me
+from lighthouse.routes import alerts, audit, chat, health, me
 
 
-def create_app(settings: Settings | None = None, verifier: TokenVerifier | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    verifier: TokenVerifier | None = None,
+    chat_model: ChatModel | None = None,
+) -> FastAPI:
     resolved = settings if settings is not None else load_settings()
+    # Built without I/O. Without an Anthropic credential (or with chat disabled) it reports
+    # itself unavailable and the rest of the API serves normally.
+    resolved_chat = chat_model if chat_model is not None else build_chat_model(resolved)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
@@ -30,6 +39,7 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
             yield
         finally:
             await pool.close()
+            await resolved_chat.aclose()
 
     app = FastAPI(
         title="LightHouse Enterprise API",
@@ -39,6 +49,8 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
         openapi_url="/openapi.json" if resolved.dev else None,
     )
     app.state.verifier = verifier if verifier is not None else build_verifier(resolved)
+    app.state.settings = resolved
+    app.state.chat_model = resolved_chat
 
     @app.middleware("http")
     async def security_headers(
@@ -55,4 +67,5 @@ def create_app(settings: Settings | None = None, verifier: TokenVerifier | None 
     app.include_router(me.router)
     app.include_router(alerts.router)
     app.include_router(audit.router)
+    app.include_router(chat.router)
     return app

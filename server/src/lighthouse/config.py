@@ -8,6 +8,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # SDK retries for 408/409/429/5xx and connection errors, with backoff. Fixed rather than
 # configurable: it multiplies worst-case latency and spend, so changing it is a code review.
 TRIAGE_MAX_RETRIES: Final = 2
+# Chat is interactive: a person is waiting, so one quick retry of a failed connection or a
+# 429/5xx before the answer starts is worth it, two with backoff is not.
+CHAT_MAX_RETRIES: Final = 1
+
+type Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
 class Settings(BaseSettings):
@@ -56,16 +61,41 @@ class Settings(BaseSettings):
     # "medium": triage is a high-volume classification-and-explanation route, where the
     # skill guidance puts medium as the step-down that holds quality; the severity floor
     # bounds the downside of a weaker judgement. Raising it needs an eval result.
-    triage_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    triage_effort: Effort = "medium"
     # Thinking counts against max_tokens. 16k keeps a non-streaming request well inside
     # SDK HTTP timeouts while leaving room for thinking plus a short structured answer.
     triage_max_tokens: int = Field(default=16_000, ge=1_024, le=32_000)
     # Per HTTP attempt. The SDK retries 429/5xx/connection errors TRIAGE_MAX_RETRIES times,
     # so one triage can take up to `triage_deadline_seconds` of wall clock.
     triage_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
-    # Tokens (input + output + cache read + cache write) one tenant may spend on triage per
-    # UTC day. 0 means "no model calls", never "unlimited": there is no unlimited setting.
+    # Tokens (input + output + cache read + cache write) one tenant may spend per UTC day,
+    # triage and chat together (every lh.model_usage row counts). 0 means "no model calls",
+    # never "unlimited": there is no unlimited setting.
     triage_daily_token_budget_per_tenant: int = Field(default=2_000_000, ge=0, le=10**12)
+
+    # --- "Ask LightHouse" chat (Phase 2) -----------------------------------------------
+    # Same key handling as triage: no key setting here; without a credential chat reports
+    # itself unavailable and the rest of the server works.
+    chat_enabled: bool = True
+    chat_model: str = Field(
+        default="claude-opus-5-5", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][\w.:-]*$"
+    )
+    # "low": chat is interactive, so time to first token matters, and the skill guidance
+    # puts chat among the routes that do well at low effort (on Opus 5.5, effort is the only
+    # thinking control and low keeps thinking short). Chat explains; it decides nothing:
+    # it cannot change an alert, its severity or its status. Raising it needs an eval
+    # result, like the triage effort. Explicit because model defaults differ.
+    chat_effort: Effort = "low"
+    # Per answer, thinking included. A cost ceiling (a stolen session should not be able to
+    # buy long essays) rather than a timeout guard: chat always streams.
+    chat_max_tokens: int = Field(default=8_000, ge=1_024, le=32_000)
+    # Wall-clock limit for one answer, from the request to the last streamed event, and
+    # the SDK's per-read timeout. An answer still running at the deadline is cut off.
+    chat_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    # Per signed-in user, counted in Postgres so the limit holds across server replicas.
+    # At least 1: turning chat off is `chat_enabled=false`, never a zero that could be
+    # read as "no limit".
+    chat_requests_per_minute_per_user: int = Field(default=10, ge=1, le=600)
 
     @property
     def triage_deadline_seconds(self) -> float:

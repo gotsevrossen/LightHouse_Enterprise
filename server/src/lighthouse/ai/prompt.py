@@ -9,7 +9,8 @@ Security boundary: prompt construction (CLAUDE.md rule 3). Threats and the contr
   control, format and separator characters) is written as a JSON `\\uXXXX` escape. The
   fence body therefore cannot contain a tag of any kind, so no casing, spacing, attribute
   or nesting trick can close the fence early. A final check refuses to build a request if
-  that invariant is ever broken.
+  that invariant is ever broken. (Escaping and the check live in `ai/fence.py`, shared
+  with chat.)
 - Cost blow-up: the evidence is capped again here (the connector schema caps it too), and
   the whole fence body has a hard character budget.
 - Data spill: only the fields of this one alert are sent. No tenant name, no customer
@@ -29,10 +30,6 @@ alerts and tenants. No timestamps, ids or tenant data go in the prefix.
 
 from __future__ import annotations
 
-import json
-import math
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
@@ -45,6 +42,19 @@ from anthropic.types.beta import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+from lighthouse.ai.fence import (
+    FALLBACK_BETA,
+    FALLBACK_MODE,
+    FENCE_CLOSE,
+    FENCE_OPEN,
+    FENCE_TAG,
+    TRUNCATION_MARK,
+    FenceIntegrityError,
+    cap,
+    cap_evidence_value,
+    dumps_escaped,
+    fenced,
+)
 from lighthouse.config import Settings
 from lighthouse.ingest.schema import EvidenceValue
 from lighthouse.triage import (
@@ -53,9 +63,6 @@ from lighthouse.triage import (
     MAX_SUMMARY_CHARS,
     TriageInput,
 )
-
-FENCE_OPEN: Final = "<untrusted_evidence>"
-FENCE_CLOSE: Final = "</untrusted_evidence>"
 
 # Defence in depth over lighthouse.ingest.schema: re-applied here because a TriageInput can
 # be built without going through a connector.
@@ -67,28 +74,6 @@ MAX_EVIDENCE_KEYS: Final = 33
 # so this is what actually bounds input tokens per alert.
 MAX_FENCE_BODY_CHARS: Final = 32_000
 PROMPT_TRUNCATION_KEY: Final = "prompt_truncated"
-TRUNCATION_MARK: Final = "…"
-
-# Server-side refusal fallback (shared/model-migration.md, "refusal stop reason" and
-# "Migrating to Claude Opus 5.5 -> Safeguards"). "default" lets Anthropic route by refusal
-# category, so there is no pinned fallback model to deprecate. Security content can trip
-# the cyber classifier; without this a false positive is an outage of triage.
-FALLBACK_BETA: Final = "server-side-fallback-2026-07-01"
-FALLBACK_MODE: Literal["default"] = "default"
-
-# Characters written as \\uXXXX inside the fence. ASCII angle brackets are the structural
-# threat; the rest are look-alikes and invisible characters that could make the fence or
-# its content read differently from what the bytes say.
-_ANGLE_LOOKALIKES: Final = frozenset(
-    chr(code)
-    for code in (
-        0x2039, 0x203A, 0x2329, 0x232A, 0x27E8, 0x27E9, 0x3008, 0x3009, 0x300A, 0x300B,
-        0xFE64, 0xFE65, 0xFF1C, 0xFF1E, 0x02C2, 0x02C3, 0x1438, 0x1433, 0x276C, 0x276D,
-        0x276E, 0x276F, 0x2770, 0x2771, 0x29FC, 0x29FD,
-    )
-)  # fmt: skip
-_ESCAPED_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
-
 
 # The severity values the model may answer with. A literal rather than the Severity enum
 # so the schema carries no class docstring (it would describe our database to the model);
@@ -205,79 +190,12 @@ class TriageRequest:
     fallbacks: Literal["default"]
 
 
-class FenceIntegrityError(RuntimeError):
-    """The rendered evidence would contain a tag. Never expected; refuse to send."""
-
-
-def _cap(value: str, limit: int) -> tuple[str, bool]:
-    if len(value) <= limit:
-        return value, False
-    return value[: limit - len(TRUNCATION_MARK)] + TRUNCATION_MARK, True
-
-
 def _cap_value(value: EvidenceValue) -> tuple[object, bool]:
-    if isinstance(value, str):
-        return _cap(value, MAX_VALUE_CHARS)
-    if isinstance(value, list):
-        cut = len(value) > MAX_LIST_ITEMS
-        items: list[str] = []
-        for item in value[:MAX_LIST_ITEMS]:
-            capped, item_cut = _cap(item, MAX_LIST_ITEM_CHARS)
-            items.append(capped)
-            cut = cut or item_cut
-        return items, cut
-    if isinstance(value, float) and not math.isfinite(value):
-        # Not valid JSON; render as text rather than fail the whole alert.
-        return str(value), False
-    return value, False
-
-
-_BMP_LAST: Final = 0xFFFF
-
-
-def _escape_char(char: str) -> str:
-    code = ord(char)
-    if code > _BMP_LAST:
-        # JSON escapes outside the BMP are written as a UTF-16 surrogate pair.
-        code -= 0x10000
-        return f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}"
-    return f"\\u{code:04x}"
-
-
-def _needs_escape(char: str) -> bool:
-    # A raw newline in json.dumps output is always indentation (newlines inside strings are
-    # already written as \n), so it is structural and must stay: escaping it would make
-    # the document invalid JSON.
-    if char == "\n":
-        return False
-    return (
-        char in "<>"
-        or char in _ANGLE_LOOKALIKES
-        or unicodedata.category(char) in _ESCAPED_CATEGORIES
-    )
-
-
-_SAFE_CHARS: Final = re.compile(r"[\x20-\x3b\x3d\x3f-\x7e\n]*")
-
-
-def _escape_json_text(text: str) -> str:
-    """Escape fence-relevant characters in already-serialised JSON.
-
-    Safe on the whole document: none of the escaped characters is structural JSON (which
-    is ASCII braces, brackets, colon, comma, quote and whitespace), so they can only occur
-    inside strings, where `\\uXXXX` is an exact JSON equivalent.
-    """
-    if _SAFE_CHARS.fullmatch(text):
-        return text
-    return "".join(_escape_char(c) if _needs_escape(c) else c for c in text)
-
-
-def _dumps(document: dict[str, object]) -> str:
-    # sort_keys: deterministic bytes for the same alert. ensure_ascii=False keeps
-    # non-English text readable (and short); dangerous characters are escaped after.
-    # The newlines from indent are the only raw control characters left in the body.
-    return _escape_json_text(
-        json.dumps(document, sort_keys=True, ensure_ascii=False, allow_nan=False, indent=1)
+    return cap_evidence_value(
+        value,
+        max_chars=MAX_VALUE_CHARS,
+        max_items=MAX_LIST_ITEMS,
+        max_item_chars=MAX_LIST_ITEM_CHARS,
     )
 
 
@@ -286,13 +204,13 @@ def render_evidence_document(alert: TriageInput) -> str:
     evidence: dict[str, object] = {}
     truncated = len(alert.evidence) > MAX_EVIDENCE_KEYS
     for key in sorted(alert.evidence)[:MAX_EVIDENCE_KEYS]:
-        safe_key, key_cut = _cap(key, 64)
+        safe_key, key_cut = cap(key, 64)
         value, value_cut = _cap_value(alert.evidence[key])
         evidence[safe_key] = value
         truncated = truncated or key_cut or value_cut
 
-    title, title_cut = _cap(alert.title, 1000)
-    description, description_cut = _cap(alert.description, 4000)
+    title, title_cut = cap(alert.title, 1000)
+    description, description_cut = cap(alert.description, 4000)
     document: dict[str, object] = {
         "source": alert.source,
         "title": title,
@@ -304,31 +222,29 @@ def render_evidence_document(alert: TriageInput) -> str:
         document["description"] = description
     truncated = truncated or title_cut or description_cut
 
-    body = _dumps({**document, PROMPT_TRUNCATION_KEY: truncated})
+    body = dumps_escaped({**document, PROMPT_TRUNCATION_KEY: truncated})
     # Over budget: drop evidence keys from the end of the sorted order until it fits. Each
     # step is deterministic, so the same alert always renders the same bytes.
     keys = sorted(evidence)
     while len(body) > MAX_FENCE_BODY_CHARS and keys:
         del evidence[keys.pop()]
-        body = _dumps({**document, "evidence": evidence, PROMPT_TRUNCATION_KEY: True})
+        body = dumps_escaped({**document, "evidence": evidence, PROMPT_TRUNCATION_KEY: True})
     if len(body) > MAX_FENCE_BODY_CHARS:
         # Only reachable with a pathological title/description; keep the metadata.
-        document["title"], _ = _cap(title, 200)
+        document["title"], _ = cap(title, 200)
         document.pop("description", None)
-        body = _dumps({**document, "evidence": {}, PROMPT_TRUNCATION_KEY: True})
+        body = dumps_escaped({**document, "evidence": {}, PROMPT_TRUNCATION_KEY: True})
     return body
 
 
 def render_user_content(alert: TriageInput) -> str:
-    body = render_evidence_document(alert)
-    # The invariant the fence rests on. _escape_json_text makes this unreachable; the check
-    # is here so a future change to rendering cannot silently reopen the hole.
-    if "<" in body or ">" in body:
-        msg = "evidence body contains an angle bracket"
-        raise FenceIntegrityError(msg)
+    # `fenced` checks the invariant the fence rests on (no angle bracket in the body).
+    # Escaping makes a violation unreachable; the check is here so a future change to
+    # rendering cannot silently reopen the hole.
+    fence = fenced(FENCE_TAG, render_evidence_document(alert))
     # source_severity is our own enum value, never attacker text, so it may sit outside.
     preamble = _USER_PREAMBLE.format(source_severity=alert.source_severity.value)
-    return f"{preamble}{FENCE_OPEN}\n{body}\n{FENCE_CLOSE}{_USER_POSTSCRIPT}"
+    return f"{preamble}{fence}{_USER_POSTSCRIPT}"
 
 
 def system_blocks() -> list[BetaTextBlockParam]:
@@ -359,3 +275,26 @@ def build_request(alert: TriageInput, settings: Settings) -> TriageRequest:
         betas=[FALLBACK_BETA],
         fallbacks=FALLBACK_MODE,
     )
+
+
+# Re-exported: these lived here before the fence helpers moved to `ai/fence.py`, and the
+# triage tests (and any reader of this module) still find them under this name.
+__all__ = [
+    "FALLBACK_BETA",
+    "FALLBACK_MODE",
+    "FENCE_CLOSE",
+    "FENCE_OPEN",
+    "MAX_FENCE_BODY_CHARS",
+    "OUTPUT_SCHEMA",
+    "PROMPT_TRUNCATION_KEY",
+    "SYSTEM_PROMPT",
+    "TRUNCATION_MARK",
+    "FenceIntegrityError",
+    "SeverityLabel",
+    "TriageOutput",
+    "TriageRequest",
+    "build_request",
+    "render_evidence_document",
+    "render_user_content",
+    "system_blocks",
+]

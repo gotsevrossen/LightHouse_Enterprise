@@ -1,7 +1,8 @@
 # LightHouse Enterprise server
 
-FastAPI control plane: authentication, tenant-scoped reads of alerts, the audit log, and
-(Phase 1) alert ingestion with Claude triage.
+FastAPI control plane: authentication, tenant-scoped reads of alerts, the audit log,
+(Phase 1) alert ingestion with Claude triage, and (Phase 2) alert status changes and the
+streamed "Ask LightHouse" chat.
 
 ## Commands
 
@@ -78,7 +79,13 @@ No `.env` file is read.
 | `LH_TRIAGE_EFFORT` | no | `low`, `medium`, `high`, `xhigh` or `max`. Default `medium`, set explicitly because model defaults differ. |
 | `LH_TRIAGE_MAX_TOKENS` | no | Per call, thinking included. Default 16000 (1024-32000). |
 | `LH_TRIAGE_TIMEOUT_SECONDS` | no | Per HTTP attempt. Default 120. The SDK retries twice, so one triage can take about 3x this. |
-| `LH_TRIAGE_DAILY_TOKEN_BUDGET_PER_TENANT` | no | Tokens (input + output + cache read + cache write) per tenant per UTC day. Default 2000000. `0` means no model calls; there is no unlimited value. |
+| `LH_TRIAGE_DAILY_TOKEN_BUDGET_PER_TENANT` | no | Tokens (input + output + cache read + cache write) per tenant per UTC day, **triage and chat together**. Default 2000000. `0` means no model calls; there is no unlimited value. |
+| `LH_CHAT_ENABLED` | no | `false` turns chat off (`GET /api/chat/status` reports `available: false`). Default `true`. Chat also reports unavailable without an Anthropic credential. |
+| `LH_CHAT_MODEL` | no | Model ID for chat. Default `claude-opus-5-5`. |
+| `LH_CHAT_EFFORT` | no | `low` ... `max`. Default `low`: chat is interactive (time to first token) and only explains; raising it needs an eval result. |
+| `LH_CHAT_MAX_TOKENS` | no | Per answer, thinking included. Default 8000 (1024-32000). A cost ceiling; answers past it end with `too_long`. |
+| `LH_CHAT_TIMEOUT_SECONDS` | no | Wall-clock limit for one answer, and the SDK's per-read timeout. Default 90. One SDK retry before the stream starts. |
+| `LH_CHAT_REQUESTS_PER_MINUTE_PER_USER` | no | Chat requests per signed-in user per UTC minute, counted in Postgres (holds across replicas). Default 10, at least 1. |
 
 HS256 shared-secret tokens are not accepted: the project must use Supabase's asymmetric
 JWT signing keys.
@@ -105,6 +112,32 @@ a stubbed HTTP transport, so they need no key and make no network calls.
 - The SDK's own `anthropic` logger is pinned to WARNING, because at DEBUG it logs request
   bodies (alert text). `ANTHROPIC_LOG=debug` does not override this.
 
+## Chat with Claude ("Ask LightHouse")
+
+`lighthouse/chat.py` holds the provider-independent `ChatModel` interface;
+`lighthouse/ai/chat_model.py` implements it with the SDK's streaming helper
+(`client.beta.messages.stream`), and `lighthouse/ai/chat_prompt.py` builds the request.
+Fencing and escaping are shared with triage in `lighthouse/ai/fence.py`.
+
+- Everything in the user turn is untrusted and fenced: the alert (`<untrusted_evidence>`),
+  the client-supplied history (`<conversation_history>`, one quoted JSON transcript, so
+  "assistant" items are never replayed as the model's own turns) and the question
+  (`<user_question>`). Nothing from the request reaches the system prompt.
+- Alert context only when `alert_id` is given, projected by role: viewers' context has
+  title, summary, recommended action, severity, status and category; analyst and above
+  also get the evidence and the triage reasoning. Never other alerts, the tenant name or
+  the user's identity.
+- Before any model call: the per-user rate limit (`lh.chat_rate_limits`, fixed UTC-minute
+  windows) and the tenant's daily token budget. No transaction is held while streaming;
+  usage (`lh.model_usage`, purpose `chat`) and the `chat.asked` audit entry (alert id,
+  model, token counts, outcome; never text) are written after, also when the client
+  disconnects mid-answer.
+- Adaptive thinking, explicit effort, server-side refusal fallbacks (`fallbacks:
+  "default"`), cache breakpoints on the frozen system prompt and on the alert context.
+- A refusal after some text has streamed ends with `{"type":"error","code":"declined"}`:
+  the console must treat the text shown before it as incomplete. The server never stores
+  question or answer text.
+
 ## Auth model
 
 - `Authorization: Bearer <Supabase access token>` on every `/api/*` route.
@@ -122,6 +155,9 @@ a stubbed HTTP transport, so they need no key and make no network calls.
 | `GET /api/me` | viewer | `{user_id, tenant_id, tenant_name, role}`; 403 if the tenant does not exist. |
 | `GET /api/alerts?limit=&cursor=` | viewer | `{items, next_cursor}`, newest first, keyset cursor, `limit` 1-200. |
 | `GET /api/alerts/{id}` | viewer | 404 for another tenant's id, same as a missing id. Analyst and above also get `evidence` and the model's `reasoning`. |
+| `PATCH /api/alerts/{id}` | analyst | Body `{"status": "new"\|"triaged"\|"investigating"\|"resolved"\|"dismissed"}`, nothing else (422). Returns the `GET` body for the caller's role. Audited as `alert.status_changed` with `from`/`to`; a no-op writes nothing. |
+| `GET /api/chat/status` | viewer | `{"available": bool}`. |
+| `POST /api/chat/stream` | viewer | Body `{"question": 1-2000 chars, "alert_id": uuid\|null, "history": [{"role": "user"\|"assistant", "content": <=4000 chars}] (<=10)}`. `application/x-ndjson`: `{"type":"start"}`, `{"type":"delta","text":...}`*, then exactly one of `{"type":"done"}` or `{"type":"error","code":"budget_exceeded"\|"rate_limited"\|"declined"\|"unavailable"\|"too_long"\|"internal"}`. Invalid bodies are 422 and an unknown or other tenant's `alert_id` is 404, before the stream starts. |
 | `GET /api/audit?limit=&cursor=` | admin | The tenant's audit trail; each read is itself audited. |
 
 ## Database roles and tenant isolation

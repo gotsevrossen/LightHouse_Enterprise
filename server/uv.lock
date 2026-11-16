@@ -524,9 +524,11 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "anyio" },
     { name = "asyncpg" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "httpx2" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -536,7 +538,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "asyncpg-stubs" },
-    { name = "httpx2" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -546,9 +547,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=2.3.0" },
+    { name = "anyio", specifier = ">=4.16.0" },
     { name = "asyncpg", specifier = ">=0.32.0" },
     { name = "fastapi", specifier = ">=0.162.4" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "pydantic", specifier = ">=2.14.3" },
     { name = "pydantic-settings", specifier = ">=2.16.2" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.15.1" },
@@ -558,7 +561,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "asyncpg-stubs", specifier = ">=0.32.0" },
-    { name = "httpx2", specifier = ">=2.16.0" },
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest-asyncio", specifier = ">=1.4.1.post1" },

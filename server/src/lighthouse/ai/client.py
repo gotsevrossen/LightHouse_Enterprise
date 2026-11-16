@@ -18,14 +18,15 @@ import logging
 
 import anthropic
 
-from lighthouse.config import TRIAGE_MAX_RETRIES, Settings
+from lighthouse.config import CHAT_MAX_RETRIES, TRIAGE_MAX_RETRIES, Settings
 
 logger = logging.getLogger(__name__)
 
 # The SDK logs full request options (the prompt, i.e. attacker-controlled alert text) at
 # DEBUG on the `anthropic` logger, which inherits the root level when ANTHROPIC_LOG is
-# unset. A server run with root logging at DEBUG would then write alert evidence into the
-# logs (CLAUDE.md "Secrets": request bodies to Claude are not logged). Pin it.
+# unset. A server run with root logging at DEBUG would then write alert evidence, and chat
+# questions and answers, into the logs (CLAUDE.md "Secrets": request bodies to Claude are
+# not logged). Pin it.
 SDK_LOGGER_LEVEL = logging.WARNING
 logging.getLogger("anthropic").setLevel(SDK_LOGGER_LEVEL)
 
@@ -33,17 +34,48 @@ logging.getLogger("anthropic").setLevel(SDK_LOGGER_LEVEL)
 def build_client(
     settings: Settings, *, http_client: anthropic.DefaultAsyncHttpxClient | None = None
 ) -> anthropic.AsyncAnthropic | None:
-    """Return a client, or None when triage is disabled or no credential is available.
+    """The triage client, or None when triage is disabled or no credential is available.
 
     `http_client` exists for tests, which inject a transport that answers locally; it
     must never be used to point production traffic elsewhere.
     """
-    if not settings.triage_enabled:
+    return _build(
+        enabled=settings.triage_enabled,
+        timeout=settings.triage_timeout_seconds,
+        max_retries=TRIAGE_MAX_RETRIES,
+        http_client=http_client,
+    )
+
+
+def build_chat_client(
+    settings: Settings, *, http_client: anthropic.DefaultAsyncHttpxClient | None = None
+) -> anthropic.AsyncAnthropic | None:
+    """The chat client, or None when chat is disabled or no credential is available.
+
+    Separate from the triage client so each has its own timeout and retry policy, and so
+    turning one feature off never turns off the other. Same credential chain.
+    """
+    return _build(
+        enabled=settings.chat_enabled,
+        timeout=settings.chat_timeout_seconds,
+        max_retries=CHAT_MAX_RETRIES,
+        http_client=http_client,
+    )
+
+
+def _build(
+    *,
+    enabled: bool,
+    timeout: float,
+    max_retries: int,
+    http_client: anthropic.DefaultAsyncHttpxClient | None,
+) -> anthropic.AsyncAnthropic | None:
+    if not enabled:
         return None
     try:
         client = anthropic.AsyncAnthropic(
-            timeout=settings.triage_timeout_seconds,
-            max_retries=TRIAGE_MAX_RETRIES,
+            timeout=timeout,
+            max_retries=max_retries,
             http_client=http_client,
         )
     except anthropic.AnthropicError as exc:
@@ -51,7 +83,7 @@ def build_client(
         logger.warning("anthropic client unavailable: %s", type(exc).__name__)
         return None
     # The constructor succeeds without credentials and fails on the first request
-    # instead. Check up front so "no key" is a clean, cheap `model_unavailable`.
+    # instead. Check up front so "no key" is a clean, cheap "unavailable".
     if client.api_key is None and client.auth_token is None and client.credentials is None:
         logger.warning("anthropic client unavailable: no credentials configured")
         return None

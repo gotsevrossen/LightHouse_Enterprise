@@ -11,9 +11,10 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from lighthouse.auth import Role
+from lighthouse.chat import MAX_HISTORY_ITEMS, MAX_QUESTION_CHARS, ChatTurn
 from lighthouse.severity import Severity
 from lighthouse.triage import ReviewReason
 
@@ -91,3 +92,31 @@ class AuditEntryOut(_Out):
 class AuditPage(_Out):
     items: list[AuditEntryOut]
     next_cursor: str | None
+
+
+# Request bodies ---------------------------------------------------------------------------
+
+
+class _In(BaseModel):
+    # Unknown fields are rejected, not ignored: a client that sends `severity` along with
+    # `status` must learn it was not applied rather than believe it was.
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class AlertStatusUpdate(_In):
+    """`PATCH /api/alerts/{id}`. Status is the only field a user may write in Phase 2;
+    severity in particular is never user-writable (it only ever rises, by triage)."""
+
+    status: AlertStatus
+
+
+class ChatStreamIn(_In):
+    """`POST /api/chat/stream`. Every field is untrusted text from the console."""
+
+    question: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
+    alert_id: UUID | None = None
+    history: list[ChatTurn] = Field(default_factory=list[ChatTurn], max_length=MAX_HISTORY_ITEMS)
+
+
+class ChatStatusOut(_Out):
+    available: bool
