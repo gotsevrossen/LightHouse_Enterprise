@@ -9,8 +9,9 @@ limits the customer sets.
 It is the enterprise sibling of [LightHouse](https://github.com/gotsevrossen/LightHouse),
 the local-only security copilot for small businesses.
 
-**Status: planning.** No application code yet.
+**Status: Phase 0 (foundations) built and verified locally; nothing deployed yet.**
 
 - [`docs/PLAN.md`](docs/PLAN.md): product, architecture, phases, risks, open decisions
+- [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md): detailed build plan for every phase and feature
 - [`CLAUDE.md`](CLAUDE.md): how Claude works in this repo, including the security rules
 - [`docs/skills.md`](docs/skills.md): the agent skills vendored in `.claude/skills/`

@@ -1,7 +1,8 @@
 # LightHouse Enterprise — CLAUDE.md
 
 Guide for Claude when working in this repository. Keep it current when a decision changes.
-The full build plan is in `docs/PLAN.md`; installed skills are listed in `docs/skills.md`.
+The product plan is in `docs/PLAN.md`, the detailed work breakdown for every phase is in
+`docs/BUILD_PLAN.md`, and installed skills are listed in `docs/skills.md`.
 
 ## What this is
 
@@ -248,6 +249,7 @@ this file, this file wins.
 ```
 CLAUDE.md               This file
 docs/PLAN.md            Product and build plan, phases, open decisions
+docs/BUILD_PLAN.md      Work packages per phase: files, threats, tests, owner steps, decisions
 docs/skills.md          Installed skills: source, commit, licence, why
 .claude/agents/coder.md The Opus 5.5 high-effort coding agent
 .claude/settings.json   Project default model (Fable 5.2 orchestrator)

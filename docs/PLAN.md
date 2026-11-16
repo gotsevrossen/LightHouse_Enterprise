@@ -1,7 +1,8 @@
 # LightHouse Enterprise — Plan
 
 Status: proposal, written 2026-11-10, hosting revised the same day (Supabase plus one
-managed container; Go agent confirmed). Nothing here is built yet.
+managed container; Go agent confirmed). Phase 0 is built (see § 4); the detailed plan for
+everything after it is in `docs/BUILD_PLAN.md`.
 
 ## 1. Product
 
