@@ -364,12 +364,32 @@ async def test_lh_app_role_attributes(superuser: Conn) -> None:
     assert (row["rolsuper"], row["rolbypassrls"], row["rolcanlogin"]) == (False, False, False)
 
 
+# The single deliberate exception: the ingestion worker's scheduling role lists connection
+# metadata across tenants (supabase/migrations/20261111010000_connectors.sql). It is
+# matched on every attribute, so any other non-tenant policy, or a widened version of
+# this one (another command, another role, another table, a WITH CHECK), still fails.
+_INGEST_LISTING_POLICY = ("connections", "connections_ingest_select", "SELECT", ["lh_ingest"], "true", None)
+
+
 async def test_every_policy_targets_lh_app_and_uses_current_tenant(superuser: Conn) -> None:
     rows = await superuser.fetch(
-        "select tablename, cmd, roles, qual, with_check from pg_policies where schemaname = 'lh'"
+        "select tablename, policyname, cmd, roles, qual, with_check "
+        "from pg_policies where schemaname = 'lh'"
     )
     assert rows
+    exceptions_seen = 0
     for row in rows:
+        shape = (
+            row["tablename"],
+            row["policyname"],
+            row["cmd"],
+            list(row["roles"]),
+            row["qual"],
+            row["with_check"],
+        )
+        if shape == _INGEST_LISTING_POLICY:
+            exceptions_seen += 1
+            continue
         assert list(row["roles"]) == ["lh_app"], row
         for expression in (row["qual"], row["with_check"]):
             if expression is not None:
@@ -377,6 +397,9 @@ async def test_every_policy_targets_lh_app_and_uses_current_tenant(superuser: Co
         if row["cmd"] == "UPDATE":
             assert row["qual"] is not None, row
             assert row["with_check"] is not None, row
+    # The exception must exist exactly once: if it is renamed or reshaped, this test has
+    # to be revisited rather than silently matching nothing.
+    assert exceptions_seen == 1
 
 
 async def test_supabase_api_roles_have_no_access(superuser: Conn) -> None:
