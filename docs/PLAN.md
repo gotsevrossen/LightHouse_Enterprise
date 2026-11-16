@@ -195,6 +195,28 @@ triage with Claude (fenced prompt, structured output, severity floor, refusal ha
 usage metering. *Done when:* a test tenant's Defender alerts appear triaged, and injected
 text in an alert cannot lower its severity.
 
+*Phase 1 status (2026-11-16):* code complete and verified locally (server 558 tests,
+lint, format and strict type-check clean; web 65 tests). Verification was done with Claude
+Opus 5.5 as orchestrator at the owner's request (Fable 5.2 was not available). Carried
+forward:
+
+- No real calls yet: needs a Supabase development project, an Anthropic development key
+  in its own workspace with a spend limit, and a test Microsoft tenant with the app
+  consented. Then confirm prompt caching hits, that the refusal fallback accepts the
+  request shape, and the Graph details listed below.
+- Supabase Vault credential provider for connector certificates (the worker exits until it
+  exists). The production worker login role needs membership of both `lh_app` and
+  `lh_ingest`.
+- Graph details not confirmed against live docs: the combined `ge`/`lt` filter on
+  `lastUpdateDateTime`, the maximum `$top`, whether `$expand=alerts` caps alerts per
+  incident or needs `SecurityAlert.Read.All`, how `Retry-After` is sent, and the AADSTS
+  message texts.
+- The daily token budget can overshoot by up to (concurrent workers x one call); add a
+  lock if that matters at scale. A one-minute window with more alerts than the per-run cap
+  stalls the cursor; it is reported in `last_error`.
+- Decision for the owner: auth and permanent connector errors set the connection to
+  `error`, which stops it until a person acts; throttling and transient errors retry.
+
 **Phase 2 — Console and chat (2–3 weeks).** SAML sign-in, roles, alert queue and detail,
 plain-English and analyst views, "Ask LightHouse" chat with streaming, triage eval set and
 harness. *Done when:* an analyst can work the queue end to end and the eval gives a

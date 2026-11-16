@@ -281,6 +281,79 @@ async def test_ingest_cannot_write(
             await conn.execute(statement)
 
 
+INGEST_COLUMNS = {"id", "tenant_id", "kind", "external_tenant_id", "status", "credential_ref"}
+_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
+_COLUMN_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
+
+
+async def test_ingest_grants_are_exactly_the_listing_columns(superuser: Conn) -> None:
+    columns = await superuser.fetch(
+        """
+        select a.attname
+          from pg_attribute a
+         where a.attrelid = 'lh.connections'::regclass and a.attnum > 0 and not a.attisdropped
+        """
+    )
+    names = {row["attname"] for row in columns}
+    assert names > INGEST_COLUMNS  # a strict superset: some columns are withheld
+    for column in sorted(names):
+        for privilege in _COLUMN_PRIVILEGES:
+            granted = await superuser.fetchval(
+                "select has_column_privilege('lh_ingest', 'lh.connections', $1, $2)",
+                column,
+                privilege,
+            )
+            expected = privilege == "SELECT" and column in INGEST_COLUMNS
+            assert granted is expected, (column, privilege)
+    for privilege in _TABLE_PRIVILEGES:
+        assert not await superuser.fetchval(
+            "select has_table_privilege('lh_ingest', 'lh.connections', $1)", privilege
+        ), privilege
+
+
+async def test_ingest_has_no_privileges_on_any_other_lh_object(superuser: Conn) -> None:
+    tables = await superuser.fetch(
+        """
+        select c.oid, c.relname
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'lh' and c.relkind in ('r', 'p', 'v', 'm') and c.relname <> 'connections'
+        """
+    )
+    assert {"tenants", "memberships", "alerts", "audit_log", "connector_cursors"} <= {
+        row["relname"] for row in tables
+    }
+    for row in tables:
+        for privilege in _TABLE_PRIVILEGES:
+            assert not await superuser.fetchval(
+                "select has_table_privilege('lh_ingest', $1::oid, $2)", row["oid"], privilege
+            ), (row["relname"], privilege)
+        for privilege in _COLUMN_PRIVILEGES:
+            assert not await superuser.fetchval(
+                "select has_any_column_privilege('lh_ingest', $1::oid, $2)", row["oid"], privilege
+            ), (row["relname"], privilege)
+    sequences = await superuser.fetch(
+        """
+        select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = 'lh' and c.relkind = 'S'
+        """
+    )
+    for row in sequences:
+        for privilege in ("USAGE", "SELECT", "UPDATE"):
+            assert not await superuser.fetchval(
+                "select has_sequence_privilege('lh_ingest', $1::oid, $2)", row["oid"], privilege
+            )
+    functions = await superuser.fetch(
+        """
+        select p.oid, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'lh'
+        """
+    )
+    for row in functions:
+        assert not await superuser.fetchval(
+            "select has_function_privilege('lh_ingest', $1::oid, 'EXECUTE')", row["oid"]
+        ), row["proname"]
+
+
 async def test_the_only_non_tenant_policy_is_the_ingest_listing(superuser: Conn) -> None:
     # The one deliberate exception to "every policy is lh_app keyed on the tenant":
     # SELECT-only, for lh_ingest, on lh.connections, and nowhere else.

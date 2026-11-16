@@ -22,11 +22,15 @@ not. Three things are deliberately the opposite of the original:
 
 ## Status
 
-Phase 0 (foundations) is built: the server skeleton with sign-in token checks and
-tenant-scoped reads, the first database migration with row-level security, the web console
-scaffold, and CI with secret scanning. Nothing is deployed, the CI workflow has not yet run
-on GitHub, and the migration has not yet been applied to a real Supabase project. No code
-calls Claude yet; that starts in Phase 1. The endpoint agent (`agent/`) does not exist yet.
+Phases 0 and 1 are built and pass locally. Phase 0: server skeleton with sign-in token
+checks and tenant-scoped reads, row-level security, web console scaffold, CI with secret
+scanning. Phase 1: a read-only Microsoft Defender XDR connector (certificate sign-in to
+Graph), the ingestion runner, and Claude triage (`server/src/lighthouse/ai/`) with the
+fenced prompt, structured output, severity floor, per-tenant daily token budget and usage
+metering. Nothing is deployed; CI has not yet run on GitHub; the migrations have not been
+applied to a real Supabase project; no real Claude or Microsoft call has been made (tests
+stub both). The worker cannot run for real until a Supabase Vault credential provider
+exists. The endpoint agent (`agent/`) does not exist yet.
 
 ## How work is done here: model roles (required)
 
@@ -257,6 +261,9 @@ server/                 FastAPI control plane (src/lighthouse, tests, Dockerfile
   src/lighthouse/auth.py    Token verification and role checks (security boundary)
   src/lighthouse/db.py      tenant_transaction: every user query runs through it (security boundary)
   src/lighthouse/triage.py  TriageResult, TriageModel interface, fixture model, severity floor
+  src/lighthouse/ai/        The only code that imports the Anthropic SDK: client, prompt, triage model (security boundary)
+  src/lighthouse/connectors/ Defender XDR connector and Microsoft Graph certificate sign-in (security boundary)
+  src/lighthouse/ingest/    Normalised alert schema, ingest pipeline (dedupe, budget, triage, store), worker runner
 supabase/migrations/    SQL migrations; tables live in the `lh` schema, not `public`
 web/                    React + TypeScript console scaffold
 .github/                CI workflow, Dependabot, pinned pip-audit tool
@@ -292,6 +299,14 @@ Details are in `server/README.md` and `web/README.md`.
   constraint, so connectors must not lower a source severity on re-ingestion.
 - The server refuses to start if `lh_app` could bypass RLS or any `lh` table lacks forced
   RLS. Do not remove that check.
+- One deliberate cross-tenant policy exists: `lh_ingest` may list a fixed set of columns of
+  `lh.connections` so the worker can schedule work. `lh_ingest` has no other privilege in
+  the schema; `test_rls.py` and `test_connectors_migration.py` pin this. Any new
+  cross-tenant access needs the owner's approval and the same kind of pinning test.
+- `lh.connections.credential_ref` holds only a `vault:` reference, never a secret, and
+  `lh_app` cannot read it.
+- Audit `detail` keys containing "token" are redacted by `audit.py`; name usage counters
+  `usage_input`, `usage_output` and so on.
 - Never commit a JWT-shaped or key-shaped literal, even a fake one, in code or tests;
   build them at run time (see `web/src/test/tokens.ts` and `server/tests/helpers.py`).
 

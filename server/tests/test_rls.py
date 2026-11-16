@@ -368,7 +368,14 @@ async def test_lh_app_role_attributes(superuser: Conn) -> None:
 # metadata across tenants (supabase/migrations/20261111010000_connectors.sql). It is
 # matched on every attribute, so any other non-tenant policy, or a widened version of
 # this one (another command, another role, another table, a WITH CHECK), still fails.
-_INGEST_LISTING_POLICY = ("connections", "connections_ingest_select", "SELECT", ["lh_ingest"], "true", None)
+_INGEST_LISTING_POLICY = (
+    "connections",
+    "connections_ingest_select",
+    "SELECT",
+    ["lh_ingest"],
+    "true",
+    None,
+)
 
 
 async def test_every_policy_targets_lh_app_and_uses_current_tenant(superuser: Conn) -> None:
