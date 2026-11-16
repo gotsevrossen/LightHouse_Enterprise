@@ -449,7 +449,9 @@ def project_evidence(
         "description": _str(alert, "description", _DESCRIPTION),
     }
     # Drop empties: absent is clearer than null, and saves the evidence budget.
-    kept = {key: value for key, value in projected.items() if value not in (None, [], "")}
+    kept: dict[str, EvidenceValue] = {
+        key: value for key, value in projected.items() if value not in (None, [], "")
+    }
     if entities.cut or any(_value_was_cut(value) for value in kept.values()):
         kept[EVIDENCE_TRUNCATED_KEY] = True
     return kept

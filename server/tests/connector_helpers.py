@@ -15,7 +15,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -37,18 +37,25 @@ type Conn = asyncpg.Connection[asyncpg.Record]
 
 
 def load_fixture(name: str) -> dict[str, Any]:
-    data = json.loads((FIXTURES / name).read_text())
+    data: Any = json.loads((FIXTURES / name).read_text())
     assert isinstance(data, dict)
-    return data
+    return cast("dict[str, Any]", data)
 
 
 def set_alert_tenant(page: dict[str, Any], directory: UUID) -> dict[str, Any]:
     """Fixtures carry a placeholder directory id; tests substitute a random one."""
-    for incident in page.get("value", []):
-        if isinstance(incident, dict) and isinstance(incident.get("alerts"), list):
-            for alert in incident["alerts"]:
-                if isinstance(alert, dict) and alert.get("tenantId") == "{directory}":
-                    alert["tenantId"] = str(directory)
+    incidents: list[Any] = page.get("value", [])
+    for incident in incidents:
+        if not isinstance(incident, dict):
+            continue
+        alerts: Any = cast("dict[str, Any]", incident).get("alerts")
+        if not isinstance(alerts, list):
+            continue
+        for alert in cast("list[Any]", alerts):
+            if isinstance(alert, dict):
+                record = cast("dict[str, Any]", alert)
+                if record.get("tenantId") == "{directory}":
+                    record["tenantId"] = str(directory)
     return page
 
 
@@ -153,7 +160,9 @@ class RecordingTransport:
         return [request.url.host for request in self.requests]
 
 
-def json_response(status: int, body: object, headers: dict[str, str] | None = None) -> httpx.Response:
+def json_response(
+    status: int, body: object, headers: dict[str, str] | None = None
+) -> httpx.Response:
     return httpx.Response(status, json=body, headers=headers)
 
 

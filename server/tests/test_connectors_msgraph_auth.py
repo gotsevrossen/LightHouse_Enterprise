@@ -13,8 +13,8 @@ from uuid import UUID, uuid4
 import httpx
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr, ValidationError
 
 from lighthouse.connectors.base import (
@@ -345,7 +345,9 @@ async def test_token_endpoint_throttling(cert: TestCertificate) -> None:
         httpx.Response(200, json={"token_type": "Bearer", "expires_in": 3599}),
         httpx.Response(200, json={"token_type": "mac", "expires_in": 3599, "access_token": "x"}),
         httpx.Response(200, json={"token_type": "Bearer", "expires_in": 5, "access_token": "x"}),
-        httpx.Response(200, json={"token_type": "Bearer", "expires_in": 10**9, "access_token": "x"}),
+        httpx.Response(
+            200, json={"token_type": "Bearer", "expires_in": 10**9, "access_token": "x"}
+        ),
     ],
     ids=["5xx", "not-json", "no-token", "wrong-type", "too-short", "too-long"],
 )

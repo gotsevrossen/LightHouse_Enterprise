@@ -150,7 +150,9 @@ def _alert_record(directory: UUID, **overrides: Any) -> dict[str, Any]:
 # Paging and normalisation ------------------------------------------------------------------
 
 
-async def test_reads_all_pages_and_normalises(credential: ConnectorCredential, directory: UUID) -> None:
+async def test_reads_all_pages_and_normalises(
+    credential: ConnectorCredential, directory: UUID
+) -> None:
     transport = _graph(list(_pages(directory)))
     tokens = StaticTokens()
     async with transport.client() as http:
@@ -394,7 +396,8 @@ async def test_page_byte_cap(credential: ConnectorCredential, directory: UUID) -
 
 async def test_network_failure_is_transient(credential: ConnectorCredential) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ReadTimeout("timed out", request=request)
+        msg = "timed out"
+        raise httpx.ReadTimeout(msg, request=request)
 
     async with RecordingTransport(handler).client() as http:
         with pytest.raises(ConnectorTransientError, match="timed out"):
@@ -427,7 +430,7 @@ def test_credential_for_another_directory_refused(credential: ConnectorCredentia
     ],
 )
 def test_limits_reject_zero_and_negative(overrides: dict[str, Any]) -> None:
-    with pytest.raises(ValueError, match="must be|inconsistent"):
+    with pytest.raises(ValueError, match=r"must be|inconsistent"):
         DefenderLimits(**overrides)
 
 
@@ -529,7 +532,9 @@ def test_hostile_alert_is_capped_data(directory: UUID) -> None:
 )
 def test_malformed_alerts_raise_malformed(directory: UUID, overrides: dict[str, Any]) -> None:
     with pytest.raises(MalformedAlertError) as caught:
-        normalize_alert(_alert_record(directory, **overrides), incident={}, expected_tenant=directory)
+        normalize_alert(
+            _alert_record(directory, **overrides), incident={}, expected_tenant=directory
+        )
     # The reason is a fixed string; nothing from the record is echoed.
     assert "\x00" not in str(caught.value)
 
@@ -548,9 +553,13 @@ def test_first_activity_used_when_created_missing(directory: UUID) -> None:
     assert alert.occurred_at == datetime(2026, 11, 9, 1, 2, 3, tzinfo=UTC)
 
 
-async def test_duplicate_alert_ids_collapse(credential: ConnectorCredential, directory: UUID) -> None:
+async def test_duplicate_alert_ids_collapse(
+    credential: ConnectorCredential, directory: UUID
+) -> None:
     alert = _alert_record(directory, id="da-dup")
-    page = {"value": [{"id": "1", "alerts": [alert]}, {"id": "2", "alerts": [copy.deepcopy(alert)]}]}
+    page = {
+        "value": [{"id": "1", "alerts": [alert]}, {"id": "2", "alerts": [copy.deepcopy(alert)]}]
+    }
     async with _graph([page]).client() as http:
         result = await _connector(http, credential).fetch(None)
     assert [a.source_alert_id for a in result.alerts] == ["da-dup"]
@@ -635,9 +644,7 @@ async def test_window_grows_back_after_complete_run(
     since = NOW - timedelta(days=3)
     _, page2 = _pages(directory)
     async with _graph([page2]).client() as http:
-        result = await _connector(http, credential).fetch(
-            encode_cursor(since, timedelta(hours=2))
-        )
+        result = await _connector(http, credential).fetch(encode_cursor(since, timedelta(hours=2)))
     assert result.next_cursor is not None
     assert decode_cursor(result.next_cursor) == (since + timedelta(hours=2), timedelta(hours=4))
 
@@ -657,7 +664,9 @@ async def test_unreadable_cursor_restarts_from_lookback(
     assert f"ge {since:%Y-%m-%dT%H:%M:%SZ}" in transport.requests[0].url.params["$filter"]
 
 
-async def test_failed_fetch_returns_no_cursor(credential: ConnectorCredential, directory: UUID) -> None:
+async def test_failed_fetch_returns_no_cursor(
+    credential: ConnectorCredential, directory: UUID
+) -> None:
     # The second page fails: the run raises, so the runner has no cursor to store and the
     # first page's alerts are not handed on half-way.
     page1, _ = _pages(directory)

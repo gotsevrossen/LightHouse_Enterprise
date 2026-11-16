@@ -395,12 +395,16 @@ async def test_truncated_run_stores_cursor_and_notes_partial(
 @pytest.mark.parametrize(
     ("error", "status", "kind"),
     [
-        (ConnectorAuthError("the client assertion was rejected", aadsts_code=700027), "error", "auth"),
+        (
+            ConnectorAuthError("the client assertion was rejected", aadsts_code=700027),
+            "error",
+            "auth",
+        ),
         (ConnectorThrottledError(30), "active", "throttled"),
         (ValueError(SECRET_TITLE), "active", "error"),
     ],
 )
-async def test_failure_kinds_recorded(  # noqa: PLR0913 - fixtures plus parameters
+async def test_failure_kinds_recorded(  # noqa: PLR0917 - fixtures plus parameters
     worker_pool: Pool,
     superuser: Conn,
     cert: TestCertificate,
@@ -462,7 +466,9 @@ async def test_concurrency_is_bounded(
     gauge = Gauge()
     setups = [await _setup(superuser, cert) for _ in range(4)]
     connectors: dict[UUID, Connector] = {
-        s.connection: FakeConnector(FetchResult(alerts=[], next_cursor="x"), delay=0.05, gauge=gauge)
+        s.connection: FakeConnector(
+            FetchResult(alerts=[], next_cursor="x"), delay=0.05, gauge=gauge
+        )
         for s in setups
     }
     outcomes = await _run(
@@ -528,7 +534,7 @@ async def test_logs_carry_ids_and_counts_only(
             FakeIngest(fail_ids={"f-2"}),
         )
     for record in caplog.records:
-        rendered = runner._JsonFormatter().format(record)  # noqa: SLF001 - the CLI's formatter
+        rendered = runner.JsonLogFormatter().format(record)
         assert SECRET_TITLE not in rendered
     finished = [r for r in caplog.records if r.getMessage() == "connector run finished"]
     assert len(finished) == 1
@@ -577,10 +583,18 @@ async def test_run_with_defender_connector(
 # Command line ----------------------------------------------------------------------------
 
 
-def test_main_refuses_without_a_credential_provider(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.ERROR):
+def test_main_refuses_without_a_credential_provider(capsys: pytest.CaptureFixture[str]) -> None:
+    root = logging.getLogger()
+    saved = (root.handlers[:], root.level)
+    try:
         assert runner.main(["--once"]) == 2
-    assert any("credential provider" in record.getMessage() for record in caplog.records)
+    finally:
+        # main() configures root logging for the process; undo it for the next tests.
+        root.handlers[:] = saved[0]
+        root.setLevel(saved[1])
+    lines = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line]
+    assert any("credential provider" in line["message"] for line in lines)
+    assert all(line["level"] == "ERROR" for line in lines)
 
 
 def test_main_requires_once() -> None:

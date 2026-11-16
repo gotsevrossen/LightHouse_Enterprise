@@ -60,7 +60,9 @@ def test_long_title_is_truncated_not_rejected() -> None:
 
 
 def test_nul_and_lone_surrogates_are_made_storable() -> None:
-    alert = _alert(title="bad\x00title\ud800", evidence={"name": "a\x00b\udfff", "items": ["\x00x"]})
+    alert = _alert(
+        title="bad\x00title\ud800", evidence={"name": "a\x00b\udfff", "items": ["\x00x"]}
+    )
     assert "\x00" not in alert.title
     alert.title.encode("utf-8")
     assert alert.evidence["name"] == "ab?"

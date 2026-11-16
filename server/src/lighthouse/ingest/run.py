@@ -466,7 +466,7 @@ async def run_once(  # noqa: PLR0913 - keyword-only dependencies of one pass
 # Command line ---------------------------------------------------------------------------
 
 
-class _JsonFormatter(logging.Formatter):
+class JsonLogFormatter(logging.Formatter):
     """One JSON object per line; only `lh_*` extras are included, by construction."""
 
     def format(self, record: logging.LogRecord) -> str:
@@ -551,7 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(_JsonFormatter())
+    handler.setFormatter(JsonLogFormatter())
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
     # httpx logs every request URL at INFO; those carry customer directory ids.
     logging.getLogger("httpx").setLevel(logging.WARNING)

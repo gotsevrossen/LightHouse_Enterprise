@@ -43,7 +43,8 @@ async def pair(superuser: Conn) -> tuple[UUID, UUID, UUID, UUID]:
     conn_b = await create_connection(superuser, tenant_b)
     for tenant, connection in ((tenant_a, conn_a), (tenant_b, conn_b)):
         await superuser.execute(
-            "insert into lh.connector_cursors (connection_id, tenant_id, cursor) values ($1, $2, $3)",
+            "insert into lh.connector_cursors (connection_id, tenant_id, cursor) "
+            "values ($1, $2, $3)",
             connection,
             tenant,
             f"cursor-{tenant}",
@@ -119,8 +120,13 @@ async def test_app_cannot_create_or_delete_connections(
 
 @pytest.mark.parametrize(
     "assignment",
-    ["credential_ref = 'vault:other'", "tenant_id = gen_random_uuid()", "kind = kind",
-     "external_tenant_id = gen_random_uuid()", "created_at = now()"],
+    [
+        "credential_ref = 'vault:other'",
+        "tenant_id = gen_random_uuid()",
+        "kind = kind",
+        "external_tenant_id = gen_random_uuid()",
+        "created_at = now()",
+    ],
 )
 async def test_app_cannot_update_identity_or_credential(
     superuser: Conn, pair: tuple[UUID, UUID, UUID, UUID], assignment: str
@@ -247,14 +253,22 @@ async def test_ingest_cannot_read_anything_else(
         "update lh.connections set status = 'disabled'",
         "update lh.connections set credential_ref = 'vault:other'",
         "delete from lh.connections",
-        "insert into lh.connections (tenant_id, kind, external_tenant_id, credential_ref) "
-        "select tenant_id, kind, gen_random_uuid(), 'vault:x' from lh.connections limit 1",
-        "insert into lh.connector_cursors (connection_id, tenant_id, cursor) "
-        "select id, tenant_id, 'x' from lh.connections limit 1",
-        "insert into lh.audit_log (tenant_id, actor, action) "
-        "select tenant_id, 'x', 'x' from lh.connections limit 1",
-        "insert into lh.alerts (tenant_id, source, source_alert_id, title, source_severity, "
-        "severity) select tenant_id, 'x', 'x', 'x', 'low', 'low' from lh.connections limit 1",
+        (
+            "insert into lh.connections (tenant_id, kind, external_tenant_id, credential_ref) "
+            "select tenant_id, kind, gen_random_uuid(), 'vault:x' from lh.connections limit 1"
+        ),
+        (
+            "insert into lh.connector_cursors (connection_id, tenant_id, cursor) "
+            "select id, tenant_id, 'x' from lh.connections limit 1"
+        ),
+        (
+            "insert into lh.audit_log (tenant_id, actor, action) "
+            "select tenant_id, 'x', 'x' from lh.connections limit 1"
+        ),
+        (
+            "insert into lh.alerts (tenant_id, source, source_alert_id, title, source_severity, "
+            "severity) select tenant_id, 'x', 'x', 'x', 'low', 'low' from lh.connections limit 1"
+        ),
         "truncate lh.connections",
     ],
 )
@@ -265,6 +279,28 @@ async def test_ingest_cannot_write(
     async with as_role(superuser, "lh_ingest") as conn:
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await conn.execute(statement)
+
+
+async def test_the_only_non_tenant_policy_is_the_ingest_listing(superuser: Conn) -> None:
+    # The one deliberate exception to "every policy is lh_app keyed on the tenant":
+    # SELECT-only, for lh_ingest, on lh.connections, and nowhere else.
+    rows = await superuser.fetch(
+        """
+        select tablename, policyname, cmd, roles, qual, with_check
+          from pg_policies
+         where schemaname = 'lh' and roles <> array['lh_app']::name[]
+        """
+    )
+    assert [dict(row.items()) for row in rows] == [
+        {
+            "tablename": "connections",
+            "policyname": "connections_ingest_select",
+            "cmd": "SELECT",
+            "roles": ["lh_ingest"],
+            "qual": "true",
+            "with_check": None,
+        }
+    ]
 
 
 async def test_ingest_tenant_setting_does_not_widen_access(
@@ -360,12 +396,19 @@ def _jwt_like() -> str:
         lambda: "",
         lambda: "vault:x\n",
     ],
-    ids=["pem", "jwt", "random-secret", "mixed-case", "too-long", "punctuation", "empty-name",
-         "empty", "newline"],
+    ids=[
+        "pem",
+        "jwt",
+        "random-secret",
+        "mixed-case",
+        "too-long",
+        "punctuation",
+        "empty-name",
+        "empty",
+        "newline",
+    ],
 )
-async def test_credential_ref_must_be_a_reference(
-    superuser: Conn, make_value: object
-) -> None:
+async def test_credential_ref_must_be_a_reference(superuser: Conn, make_value: object) -> None:
     assert callable(make_value)
     tenant = await create_tenant(superuser)
     with pytest.raises(asyncpg.CheckViolationError):
