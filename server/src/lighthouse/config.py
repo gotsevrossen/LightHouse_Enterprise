@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Self
+from typing import Final, Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# SDK retries for 408/409/429/5xx and connection errors, with backoff. Fixed rather than
+# configurable: it multiplies worst-case latency and spend, so changing it is a code review.
+TRIAGE_MAX_RETRIES: Final = 2
 
 
 class Settings(BaseSettings):
@@ -35,6 +39,43 @@ class Settings(BaseSettings):
     jwt_jwks_url: str | None = None
     jwt_public_key: str | None = None
     jwt_leeway_seconds: int = Field(default=30, ge=0, le=300)
+
+    # --- Triage with Claude (CLAUDE.md "Using the Claude API") ---------------------------
+    # The Anthropic API key is NOT a setting here: the SDK reads ANTHROPIC_API_KEY from the
+    # container's runtime secrets itself, so the key never passes through this object, its
+    # repr, or a validation error. Without a key the server still starts and serves;
+    # triage then stores alerts as needing human review (reason `model_unavailable`).
+    triage_enabled: bool = True
+    # Model IDs come from configuration. Moving to a cheaper model is the owner's decision,
+    # taken on eval results (docs/PLAN.md 2.6).
+    triage_model: str = Field(
+        default="claude-opus-5-5", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][\w.:-]*$"
+    )
+    # Explicit, because the default differs by model (Opus 5.5 defaults to "medium",
+    # others to "high") and a silent change of model must not silently change spend.
+    # "medium": triage is a high-volume classification-and-explanation route, where the
+    # skill guidance puts medium as the step-down that holds quality; the severity floor
+    # bounds the downside of a weaker judgement. Raising it needs an eval result.
+    triage_effort: Literal["low", "medium", "high", "xhigh", "max"] = "medium"
+    # Thinking counts against max_tokens. 16k keeps a non-streaming request well inside
+    # SDK HTTP timeouts while leaving room for thinking plus a short structured answer.
+    triage_max_tokens: int = Field(default=16_000, ge=1_024, le=32_000)
+    # Per HTTP attempt. The SDK retries 429/5xx/connection errors TRIAGE_MAX_RETRIES times,
+    # so one triage can take up to `triage_deadline_seconds` of wall clock.
+    triage_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    # Tokens (input + output + cache read + cache write) one tenant may spend on triage per
+    # UTC day. 0 means "no model calls", never "unlimited": there is no unlimited setting.
+    triage_daily_token_budget_per_tenant: int = Field(default=2_000_000, ge=0, le=10**12)
+
+    @property
+    def triage_deadline_seconds(self) -> float:
+        """Upper bound on one triage call, SDK retries included, plus a small margin."""
+        return self.triage_timeout_seconds * (TRIAGE_MAX_RETRIES + 1) + 15.0
+
+    @property
+    def triage_claim_lease_seconds(self) -> float:
+        """How long an alert's triage claim blocks other workers before it is abandoned."""
+        return self.triage_deadline_seconds + 60.0
 
     @model_validator(mode="after")
     def _check_key_source(self) -> Self:

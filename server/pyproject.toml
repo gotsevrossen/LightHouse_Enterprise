@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "LightHouse Enterprise control plane: API, connectors, triage and agent gateway."
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=2.3.0",
     "asyncpg>=0.32.0",
     "fastapi>=0.162.4",
+    "httpx>=0.28.1",
     "pydantic>=2.14.3",
     "pydantic-settings>=2.16.2",
     "pyjwt[crypto]>=2.15.1",
@@ -19,7 +21,6 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "asyncpg-stubs>=0.32.0",
-    "httpx>=0.28.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.4.1.post1",
