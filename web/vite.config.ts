@@ -25,12 +25,15 @@ function contentSecurityPolicy(): Plugin {
     name: "lighthouse-csp",
     apply: "build",
     configResolved(config) {
-      // src/config.ts validates this value fully at runtime; here we only need its origin.
-      const raw: unknown = config.env.VITE_API_BASE_URL;
-      const origin = typeof raw === "string" ? /^(https?:\/\/[^/?#\s]+)/i.exec(raw.trim())?.[1] : undefined;
-      if (origin !== undefined) {
-        connectSrc = `'self' ${origin.toLowerCase()}`;
+      // src/config.ts validates these values fully at runtime; here we only need their
+      // origins. The Supabase origin is needed for sign-in (starting single sign-on,
+      // checking the session, refreshing and revoking it); nothing else is fetched there.
+      const origins = new Set<string>();
+      for (const raw of [config.env.VITE_API_BASE_URL, config.env.VITE_SUPABASE_URL] as unknown[]) {
+        const origin = typeof raw === "string" ? /^(https?:\/\/[^/?#\s'";]+)/i.exec(raw.trim())?.[1] : undefined;
+        if (origin !== undefined) origins.add(origin.toLowerCase());
       }
+      connectSrc = ["'self'", ...origins].join(" ");
     },
     transformIndexHtml() {
       const policy = [

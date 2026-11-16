@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Alert, AlertPage, ApiClient } from "../api.ts";
+import { formatStatus } from "./alertText.ts";
 import { describeError } from "./errorText.ts";
 import { SeverityLabel, severityLabel } from "./SeverityLabel.tsx";
 
@@ -46,8 +47,28 @@ function isAbort(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-export function AlertsQueue({ api }: { api: ApiClient }) {
+interface AlertsQueueProps {
+  readonly api: ApiClient;
+  /** Opens an alert's detail view. Without it, titles are plain text. */
+  readonly onOpen?: ((id: string) => void) | undefined;
+  /** The latest copy of an alert changed elsewhere (a status change), merged in by id. */
+  readonly updated?: Alert | null | undefined;
+  /** Shown under the heading, above the list (the general "Ask LightHouse" panel). */
+  readonly beforeList?: ReactNode;
+}
+
+export function AlertsQueue({ api, onOpen, updated, beforeList }: AlertsQueueProps) {
   const [state, setState] = useState<QueueState>({ kind: "loading" });
+
+  // Merge a changed alert in when the prop changes (React's "adjust state on prop change"
+  // pattern: during render, not in an effect).
+  const [mergedUpdate, setMergedUpdate] = useState(updated);
+  if (updated !== mergedUpdate) {
+    setMergedUpdate(updated);
+    if (updated !== null && updated !== undefined && state.kind === "ready") {
+      setState({ ...state, items: state.items.map((alert) => (alert.id === updated.id ? updated : alert)) });
+    }
+  }
   const [reloadCount, setReloadCount] = useState(0);
   const moreRequest = useRef<AbortController | null>(null);
 
@@ -109,6 +130,8 @@ export function AlertsQueue({ api }: { api: ApiClient }) {
         </button>
       </div>
 
+      {beforeList}
+
       <p role="status" className="queue-status">
         {statusText(state)}
       </p>
@@ -126,7 +149,7 @@ export function AlertsQueue({ api }: { api: ApiClient }) {
         <>
           <ul className="alert-list">
             {state.items.map((alert) => (
-              <AlertRow key={alert.id} alert={alert} />
+              <AlertRow key={alert.id} alert={alert} onOpen={onOpen} />
             ))}
           </ul>
           {state.nextCursor !== null && (
@@ -163,11 +186,6 @@ function statusText(state: QueueState): string {
   }
 }
 
-function formatStatus(status: string): string {
-  const words = status.replaceAll("_", " ").trim();
-  return words === "" ? "Not set" : words.charAt(0).toUpperCase() + words.slice(1);
-}
-
 function formatTime(iso: string): string {
   return dateFormat.format(new Date(iso));
 }
@@ -175,8 +193,9 @@ function formatTime(iso: string): string {
 // Every string rendered here except created_at comes from a customer system and is
 // attacker-controlled. It is only ever placed in React text nodes: never in
 // dangerouslySetInnerHTML, an href, a src, a style or a class name.
-function AlertRow({ alert }: { alert: Alert }) {
+function AlertRow({ alert, onOpen }: { alert: Alert; onOpen: ((id: string) => void) | undefined }) {
   const sourceDiffers = alert.source_severity !== alert.severity;
+  const title = alert.title.trim() === "" ? "Untitled alert" : alert.title;
   return (
     <li className="alert">
       <div className="alert-severity">
@@ -186,7 +205,23 @@ function AlertRow({ alert }: { alert: Alert }) {
         )}
       </div>
       <div className="alert-body">
-        <h2 className="alert-title">{alert.title.trim() === "" ? "Untitled alert" : alert.title}</h2>
+        <h2 className="alert-title">
+          {onOpen === undefined ? (
+            title
+          ) : (
+            // The alert id is passed back as data; it is never built into a URL here.
+            <button
+              type="button"
+              className="link-button"
+              data-alert-id={alert.id}
+              onClick={() => {
+                onOpen(alert.id);
+              }}
+            >
+              {title}
+            </button>
+          )}
+        </h2>
         {alert.needs_human_review && <p className="review-flag">Needs human review</p>}
         {alert.summary !== null && alert.summary.trim() !== "" ? (
           <p className="alert-summary">{alert.summary}</p>

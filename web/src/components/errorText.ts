@@ -8,6 +8,8 @@ export function describeError(error: unknown, subject: string): string {
   switch (error.kind) {
     case "forbidden":
       return `Your role does not include access to ${subject}. Ask an admin in your organisation to change it.`;
+    case "not_found":
+      return `The LightHouse service could not find ${subject}. It may have been removed. Go back to the alerts and try again.`;
     case "network":
       return `The console could not reach the LightHouse service to load ${subject}. Check your connection, then try again.`;
     case "invalid_response":

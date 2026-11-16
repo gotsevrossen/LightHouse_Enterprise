@@ -1,14 +1,18 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-export type SignOutReason = "user" | "session_ended";
+/** Why the console is signed out: by the person, by an expired or rejected session, or a failed single sign-on. */
+export type SignOutReason = "user" | "session_ended" | "sign_in_failed";
 
 export type AuthState =
   | { readonly status: "signed_in" }
+  /** Finishing a single sign-on redirect; nothing can be done until it settles. */
+  | { readonly status: "signing_in" }
   | { readonly status: "signed_out"; readonly reason: SignOutReason | null };
 
 /**
- * What the console needs from a sign-in system. Phase 2 implements this with Supabase Auth
- * (SAML single sign-on); until then MemoryAuthProvider stands in for development.
+ * What the console needs from a sign-in system. SupabaseAuthProvider (src/supabaseAuth.ts)
+ * implements it with Supabase Auth (SAML single sign-on); MemoryAuthProvider stands in for
+ * development builds without Supabase.
  *
  * Implementations must keep tokens in memory only. Never write a token to localStorage,
  * sessionStorage, IndexedDB or a readable cookie: any script injection or shared machine
