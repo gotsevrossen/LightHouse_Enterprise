@@ -1,0 +1,121 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#security/incidents(alerts())",
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/security/incidents?$expand=alerts&$top=50&$skiptoken=page2",
+  "value": [
+    {
+      "id": "1001",
+      "tenantId": "{directory}",
+      "status": "active",
+      "displayName": "Synthetic multi-stage incident on one endpoint",
+      "createdDateTime": "2026-11-10T08:00:00.1234567Z",
+      "lastUpdateDateTime": "2026-11-10T09:30:00.5Z",
+      "severity": "high",
+      "unknownIncidentField": {"ignored": true},
+      "alerts": [
+        {
+          "id": "da-synthetic-0001",
+          "providerAlertId": "synthetic-0001",
+          "incidentId": "1001",
+          "tenantId": "{directory}",
+          "status": "new",
+          "severity": "high",
+          "classification": "unknown",
+          "determination": "unknown",
+          "serviceSource": "microsoftDefenderForEndpoint",
+          "detectionSource": "microsoftDefenderForEndpoint",
+          "productName": "Microsoft Defender for Endpoint",
+          "title": "Suspicious PowerShell command line",
+          "description": "A synthetic description written for tests.",
+          "recommendedActions": "Not projected: this field must not reach the evidence.",
+          "categories": ["Execution"],
+          "category": "Execution",
+          "alertWebUrl": "https://security.microsoft.com/alerts/da-synthetic-0001",
+          "mitreTechniques": ["T1059.001", "T1086", "not-a-technique"],
+          "createdDateTime": "2026-11-10T08:00:00.0000001Z",
+          "lastUpdateDateTime": "2026-11-10T09:30:00Z",
+          "firstActivityDateTime": "2026-11-10T07:55:00Z",
+          "lastActivityDateTime": "2026-11-10T07:59:00Z",
+          "comments": [{"comment": "Not projected", "createdByDisplayName": "Example Analyst"}],
+          "customDetails": {"notProjected": "custom detail"},
+          "someFutureField": [1, 2, 3],
+          "evidence": [
+            {
+              "@odata.type": "#microsoft.graph.security.deviceEvidence",
+              "deviceDnsName": "ws-0001.corp.example.com",
+              "hostName": "ws-0001",
+              "lastIpAddress": "192.0.2.10"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.userEvidence",
+              "userAccount": {
+                "accountName": "alex",
+                "domainName": "CORP",
+                "userPrincipalName": "alex@example.com",
+                "userSid": "S-1-5-21-0-0-0-1001"
+              }
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.ipEvidence",
+              "ipAddress": "192.0.2.10"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.ipEvidence",
+              "ipAddress": "2001:db8::1"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.ipEvidence",
+              "ipAddress": "not an ip"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.processEvidence",
+              "processCommandLine": "powershell.exe -NoProfile -EncodedCommand AAAA",
+              "imageFile": {
+                "fileName": "powershell.exe",
+                "filePath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0",
+                "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "userAccount": {"accountName": "svc-test", "domainName": "CORP"}
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.fileEvidence",
+              "fileDetails": {"fileName": "invoice.pdf.exe", "sha256": "not-a-hash"}
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.urlEvidence",
+              "url": "https://download.example.invalid/payload"
+            },
+            {
+              "@odata.type": "#microsoft.graph.security.mailboxEvidence",
+              "primaryAddress": "not-projected@example.com"
+            },
+            "not an object"
+          ]
+        },
+        {
+          "id": "da-synthetic-0002",
+          "incidentId": "1001",
+          "tenantId": "{directory}",
+          "severity": "informational",
+          "title": "Synthetic informational alert",
+          "category": "Discovery",
+          "createdDateTime": "2026-11-10T08:05:00+01:00",
+          "evidence": []
+        }
+      ]
+    },
+    {
+      "id": "1002",
+      "status": "active",
+      "alerts": [
+        {"title": "alert without an id", "severity": "high", "createdDateTime": "2026-11-10T08:00:00Z"},
+        "an alert that is not an object",
+        {"id": "da-synthetic-bad-time", "severity": "low", "title": "Bad timestamp", "createdDateTime": "yesterday"},
+        {"id": "da-synthetic-other-dir", "tenantId": "00000000-0000-4000-8000-000000000000", "severity": "high", "title": "Another directory", "createdDateTime": "2026-11-10T08:00:00Z"},
+        {"id": "da-synthetic-0003", "severity": "low", "title": "   ", "createdDateTime": "2026-11-10T08:10:00Z"}
+      ]
+    },
+    "an incident that is not an object",
+    {"id": "1003", "alerts": "not a list"},
+    {"id": "1004"}
+  ]
+}

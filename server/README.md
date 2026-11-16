@@ -1,7 +1,7 @@
 # LightHouse Enterprise server
 
-FastAPI control plane. Phase 0 provides authentication, tenant-scoped reads of alerts, the
-audit log, and the provider-independent triage pieces (no model calls yet).
+FastAPI control plane: authentication, tenant-scoped reads of alerts, the audit log, and
+(Phase 1) alert ingestion with Claude triage.
 
 ## Commands
 
@@ -72,9 +72,38 @@ No `.env` file is read.
 | `LH_DEV` | no | `1` exposes `/docs` and `/openapi.json`. Never on a deployed environment. |
 | `LH_DB_POOL_MIN_SIZE`, `LH_DB_POOL_MAX_SIZE` | no | Connection pool bounds (1, 10). |
 | `LH_DB_STATEMENT_CACHE_SIZE` | no | Set `0` behind a transaction-mode pooler (Supavisor 6543). |
+| `ANTHROPIC_API_KEY` | no | **Secret.** Read by the Anthropic SDK itself, never by our settings. Without it the server starts and serves, and triage stores alerts as needing human review (`model_unavailable`). Separate keys for development and production. |
+| `LH_TRIAGE_ENABLED` | no | `false` turns model calls off (`model_disabled`). Default `true`. |
+| `LH_TRIAGE_MODEL` | no | Model ID. Default `claude-opus-5-5`. A cheaper model is an owner decision backed by an eval. |
+| `LH_TRIAGE_EFFORT` | no | `low`, `medium`, `high`, `xhigh` or `max`. Default `medium`, set explicitly because model defaults differ. |
+| `LH_TRIAGE_MAX_TOKENS` | no | Per call, thinking included. Default 16000 (1024-32000). |
+| `LH_TRIAGE_TIMEOUT_SECONDS` | no | Per HTTP attempt. Default 120. The SDK retries twice, so one triage can take about 3x this. |
+| `LH_TRIAGE_DAILY_TOKEN_BUDGET_PER_TENANT` | no | Tokens (input + output + cache read + cache write) per tenant per UTC day. Default 2000000. `0` means no model calls; there is no unlimited value. |
 
 HS256 shared-secret tokens are not accepted: the project must use Supabase's asymmetric
 JWT signing keys.
+
+## Triage with Claude
+
+`lighthouse.ai` is the only package that imports the Anthropic SDK; the rest of the server
+uses the `TriageModel` interface (`lighthouse/triage.py`), and tests use a fixture model or
+a stubbed HTTP transport, so they need no key and make no network calls.
+
+- One request per alert: adaptive thinking, explicit effort, structured output validated
+  again in code, server-side refusal fallbacks (`fallbacks: "default"`), and a prompt-cache
+  breakpoint on the frozen system prompt. Alert content goes only inside one
+  `<untrusted_evidence>` fence in which every angle bracket is escaped.
+- Stored severity is never below the source's: in code, in the pipeline SQL, and by the
+  `severity >= source_severity` constraint.
+- Refusals, cut-off or invalid output, timeouts, rate limits and API errors all store the
+  alert as needing human review with a machine-readable `review_reason`; ingestion carries
+  on. Outcomes the alert content can provoke are not retried for unchanged content.
+- `ingest/pipeline.py` holds no transaction across the model call, skips unchanged alerts
+  (content hash), checks the tenant's daily token budget first, and writes one
+  `lh.model_usage` row and one audit entry (ids, model, token counts, reason; no alert
+  text) per model call.
+- The SDK's own `anthropic` logger is pinned to WARNING, because at DEBUG it logs request
+  bodies (alert text). `ANTHROPIC_LOG=debug` does not override this.
 
 ## Auth model
 
@@ -92,7 +121,7 @@ JWT signing keys.
 | `GET /healthz` | none | `{"status": "ok"}`, nothing else. |
 | `GET /api/me` | viewer | `{user_id, tenant_id, tenant_name, role}`; 403 if the tenant does not exist. |
 | `GET /api/alerts?limit=&cursor=` | viewer | `{items, next_cursor}`, newest first, keyset cursor, `limit` 1-200. |
-| `GET /api/alerts/{id}` | viewer | 404 for another tenant's id, same as a missing id. |
+| `GET /api/alerts/{id}` | viewer | 404 for another tenant's id, same as a missing id. Analyst and above also get `evidence` and the model's `reasoning`. |
 | `GET /api/audit?limit=&cursor=` | admin | The tenant's audit trail; each read is itself audited. |
 
 ## Database roles and tenant isolation

@@ -36,7 +36,16 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from lighthouse.connectors._http import retry_after_seconds, send_capped
+from lighthouse.connectors._http import (
+    HTTP_BAD_REQUEST,
+    HTTP_FORBIDDEN,
+    HTTP_OK,
+    HTTP_SERVER_ERROR,
+    HTTP_UNAUTHORIZED,
+    THROTTLING_STATUSES,
+    retry_after_seconds,
+    send_capped,
+)
 from lighthouse.connectors.base import (
     ConnectorAuthError,
     ConnectorCredential,
@@ -257,17 +266,17 @@ class GraphTokenProvider:
             data=form,
             headers={"Accept": "application/json"},
             max_bytes=MAX_TOKEN_RESPONSE_BYTES,
-            timeout=self._timeout,
+            timeout_seconds=self._timeout,
         )
         status = response.status_code
-        if status == httpx.codes.OK:
+        if status == HTTP_OK:
             return _parse_token_response(response.body, now=now)
-        if status in {httpx.codes.TOO_MANY_REQUESTS, httpx.codes.SERVICE_UNAVAILABLE}:
+        if status in THROTTLING_STATUSES:
             raise ConnectorThrottledError(retry_after_seconds(response.headers))
-        if status >= httpx.codes.INTERNAL_SERVER_ERROR:
+        if status >= HTTP_SERVER_ERROR:
             msg = f"identity platform error (HTTP {status})"
             raise ConnectorTransientError(msg)
-        if status in {httpx.codes.BAD_REQUEST, httpx.codes.UNAUTHORIZED, httpx.codes.FORBIDDEN}:
+        if status in {HTTP_BAD_REQUEST, HTTP_UNAUTHORIZED, HTTP_FORBIDDEN}:
             code = _aadsts_code(response.body)
             message = _AADSTS_MESSAGES.get(code, _GENERIC_REJECTION) if code else _GENERIC_REJECTION
             raise ConnectorAuthError(message, aadsts_code=code)

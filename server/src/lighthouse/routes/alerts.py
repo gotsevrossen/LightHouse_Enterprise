@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from lighthouse.auth import Principal, Role, require_role
 from lighthouse.db import Pool, Record, get_pool, tenant_transaction
-from lighthouse.models import AlertOut, AlertPage
+from lighthouse.models import AlertDetailOut, AlertOut, AlertPage
 from lighthouse.pagination import (
     MAX_PAGE_SIZE,
     InvalidCursorError,
@@ -24,7 +24,8 @@ router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 # application-side filter here would hide a broken policy instead of exposing it.
 LIST_ALERTS_SQL: Final = """
     select id, source, source_alert_id, title, source_severity, severity, status,
-           summary, recommended_action, needs_human_review, created_at, updated_at
+           summary, recommended_action, needs_human_review, created_at, updated_at,
+           category, occurred_at, confidence, review_reason, triaged_at
       from lh.alerts
      order by created_at desc, id desc
      limit $1
@@ -32,7 +33,8 @@ LIST_ALERTS_SQL: Final = """
 
 LIST_ALERTS_AFTER_SQL: Final = """
     select id, source, source_alert_id, title, source_severity, severity, status,
-           summary, recommended_action, needs_human_review, created_at, updated_at
+           summary, recommended_action, needs_human_review, created_at, updated_at,
+           category, occurred_at, confidence, review_reason, triaged_at
       from lh.alerts
      where (created_at, id) < ($1, $2)
      order by created_at desc, id desc
@@ -41,10 +43,26 @@ LIST_ALERTS_AFTER_SQL: Final = """
 
 GET_ALERT_SQL: Final = """
     select id, source, source_alert_id, title, source_severity, severity, status,
-           summary, recommended_action, needs_human_review, created_at, updated_at
+           summary, recommended_action, needs_human_review, created_at, updated_at,
+           category, occurred_at, confidence, review_reason, triaged_at
       from lh.alerts
      where id = $1
 """
+
+
+# Analyst-only columns. A separate statement rather than fetching and dropping them, so a
+# viewer's request never loads attacker-controlled evidence at all.
+GET_ALERT_DETAIL_SQL: Final = """
+    select id, source, source_alert_id, title, source_severity, severity, status,
+           summary, recommended_action, needs_human_review, created_at, updated_at,
+           category, occurred_at, confidence, review_reason, triaged_at,
+           evidence, reasoning
+      from lh.alerts
+     where id = $1
+"""
+
+# Who may see raw evidence and the model's rationale (CLAUDE.md rule 10: server-side).
+DETAIL_ROLE: Final = Role.ANALYST
 
 
 def _to_alert(row: Record) -> AlertOut:
@@ -85,11 +103,14 @@ async def get_alert(
     alert_id: UUID,
     principal: Annotated[Principal, Depends(require_role(Role.VIEWER))],
     pool: Annotated[Pool, Depends(get_pool)],
-) -> AlertOut:
+) -> AlertDetailOut | AlertOut:
+    detailed = principal.role.at_least(DETAIL_ROLE)
     async with tenant_transaction(pool, principal.tenant_id) as conn:
-        row = await conn.fetchrow(GET_ALERT_SQL, alert_id)
+        row = await conn.fetchrow(GET_ALERT_DETAIL_SQL if detailed else GET_ALERT_SQL, alert_id)
     # 404, not 403, for another tenant's id: RLS makes it indistinguishable from an id that
     # does not exist, and the response must not confirm that it exists elsewhere.
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+    if detailed:
+        return AlertDetailOut.model_validate(dict(row.items()))
     return _to_alert(row)

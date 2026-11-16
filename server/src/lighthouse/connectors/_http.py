@@ -16,6 +16,18 @@ from lighthouse.connectors.base import ConnectorTransientError
 DEFAULT_RETRY_AFTER_SECONDS: Final = 60
 MAX_RETRY_AFTER_SECONDS: Final = 3600
 
+# Plain ints: comparing a status code against these reads the same everywhere and type
+# checks cleanly (pyright mis-types `httpx.codes` members in comparisons).
+HTTP_OK: Final = 200
+HTTP_BAD_REQUEST: Final = 400
+HTTP_UNAUTHORIZED: Final = 401
+HTTP_FORBIDDEN: Final = 403
+HTTP_REQUEST_TIMEOUT: Final = 408
+HTTP_TOO_MANY_REQUESTS: Final = 429
+HTTP_SERVER_ERROR: Final = 500
+HTTP_SERVICE_UNAVAILABLE: Final = 503
+THROTTLING_STATUSES: Final = frozenset({HTTP_TOO_MANY_REQUESTS, HTTP_SERVICE_UNAVAILABLE})
+
 
 @dataclass(frozen=True, slots=True)
 class CappedResponse:
@@ -24,13 +36,13 @@ class CappedResponse:
     body: bytes
 
 
-async def send_capped(
+async def send_capped(  # noqa: PLR0913 - keyword-only options of one request
     http: httpx.AsyncClient,
     method: str,
     url: str,
     *,
     max_bytes: int,
-    timeout: float,
+    timeout_seconds: float,
     headers: Mapping[str, str] | None = None,
     data: Mapping[str, str] | None = None,
 ) -> CappedResponse:
@@ -46,7 +58,10 @@ async def send_capped(
         url,
         headers=dict(headers or {}),
         data=dict(data) if data is not None else None,
-        timeout=httpx.Timeout(timeout),
+        # Applies to connect, each read, each write and pool wait: a server trickling
+        # bytes cannot hold the request open past this between chunks. The runner's
+        # per-connection budget bounds the total.
+        timeout=httpx.Timeout(timeout_seconds),
     )
     try:
         response = await http.send(request, stream=True, follow_redirects=False)

@@ -47,7 +47,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lighthouse.config import Settings
 from lighthouse.ingest.schema import EvidenceValue
-from lighthouse.severity import Severity
 from lighthouse.triage import (
     MAX_ACTION_CHARS,
     MAX_REASONING_CHARS,
@@ -75,15 +74,19 @@ TRUNCATION_MARK: Final = "…"
 # category, so there is no pinned fallback model to deprecate. Security content can trip
 # the cyber classifier; without this a false positive is an outage of triage.
 FALLBACK_BETA: Final = "server-side-fallback-2026-07-01"
-FALLBACK_MODE: Final[Literal["default"]] = "default"
+FALLBACK_MODE: Literal["default"] = "default"
 
 # Characters written as \\uXXXX inside the fence. ASCII angle brackets are the structural
 # threat; the rest are look-alikes and invisible characters that could make the fence or
 # its content read differently from what the bytes say.
 _ANGLE_LOOKALIKES: Final = frozenset(
-    "‹›〈〉⟨⟩〈〉《》﹤﹥＜＞"
-    "˂˃ᐸᐳ❬❭❮❯❰❱⧼⧽"
-)
+    chr(code)
+    for code in (
+        0x2039, 0x203A, 0x2329, 0x232A, 0x27E8, 0x27E9, 0x3008, 0x3009, 0x300A, 0x300B,
+        0xFE64, 0xFE65, 0xFF1C, 0xFF1E, 0x02C2, 0x02C3, 0x1438, 0x1433, 0x276C, 0x276D,
+        0x276E, 0x276F, 0x2770, 0x2771, 0x29FC, 0x29FD,
+    )
+)  # fmt: skip
 _ESCAPED_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
 
 
@@ -229,9 +232,12 @@ def _cap_value(value: EvidenceValue) -> tuple[object, bool]:
     return value, False
 
 
+_BMP_LAST: Final = 0xFFFF
+
+
 def _escape_char(char: str) -> str:
     code = ord(char)
-    if code > 0xFFFF:
+    if code > _BMP_LAST:
         # JSON escapes outside the BMP are written as a UTF-16 surrogate pair.
         code -= 0x10000
         return f"\\u{0xD800 + (code >> 10):04x}\\u{0xDC00 + (code & 0x3FF):04x}"
@@ -239,6 +245,11 @@ def _escape_char(char: str) -> str:
 
 
 def _needs_escape(char: str) -> bool:
+    # A raw newline in json.dumps output is always indentation (newlines inside strings are
+    # already written as \n), so it is structural and must stay: escaping it would make
+    # the document invalid JSON.
+    if char == "\n":
+        return False
     return (
         char in "<>"
         or char in _ANGLE_LOOKALIKES

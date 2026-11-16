@@ -147,40 +147,18 @@ class AnthropicTriageModel:
                 source, reason=reason, usage=TriageUsage(), model=configured
             )
 
+        # The SDK hands back the raw body when a 200 is not JSON. Anything that is not a
+        # parsed message is an API fault, not an answer.
+        if not isinstance(message, BetaMessage):  # pyright: ignore[reportUnnecessaryIsInstance]
+            logger.warning("triage call returned an unparseable response")
+            return needs_human_review_result(
+                source, reason=ReviewReason.API_ERROR, usage=TriageUsage(), model=configured
+            )
         usage = usage_from(message)
         served = _model_name(message.model, configured)
-
-        # stop_reason before content, always (shared/model-migration.md, refusal section).
-        if message.stop_reason == "refusal":
-            category = message.stop_details.category if message.stop_details else None
-            logger.info("triage refused by model: category=%s", category)
-            return needs_human_review_result(
-                source, reason=ReviewReason.REFUSAL, usage=usage, model=served
-            )
-        if message.stop_reason == "max_tokens":
-            return needs_human_review_result(
-                source, reason=ReviewReason.MAX_TOKENS, usage=usage, model=served
-            )
-        if message.stop_reason != "end_turn":
-            logger.warning("triage stopped unexpectedly: %s", message.stop_reason)
-            return needs_human_review_result(
-                source, reason=ReviewReason.UNEXPECTED_STOP, usage=usage, model=served
-            )
-
-        texts = [block.text for block in message.content if block.type == "text"]
-        if len(texts) != 1:
-            return needs_human_review_result(
-                source, reason=ReviewReason.SCHEMA_INVALID, usage=usage, model=served
-            )
-        try:
-            output = TriageOutput.model_validate_json(texts[0])
-        except ValidationError:
-            # The validation error can quote model text; log nothing but the fact.
-            logger.warning("triage output failed schema validation")
-            return needs_human_review_result(
-                source, reason=ReviewReason.SCHEMA_INVALID, usage=usage, model=served
-            )
-
+        output = _read_output(message)
+        if isinstance(output, ReviewReason):
+            return needs_human_review_result(source, reason=output, usage=usage, model=served)
         return TriageResult(
             # The model may raise severity, never lower it below the source's.
             severity=apply_source_floor(source, Severity(output.severity)),
@@ -191,6 +169,33 @@ class AnthropicTriageModel:
             model=served,
             usage=usage,
         )
+
+
+def _read_output(message: BetaMessage) -> TriageOutput | ReviewReason:
+    """The validated answer, or why there is none. Reads content only after stop_reason."""
+    # stop_reason before content, always (shared/model-migration.md, refusal section): a
+    # refusal can carry an empty or partial content array.
+    if message.stop_reason == "refusal":
+        category = message.stop_details.category if message.stop_details else None
+        logger.info("triage refused by model: category=%s", category)
+        return ReviewReason.REFUSAL
+    if message.stop_reason == "max_tokens":
+        return ReviewReason.MAX_TOKENS
+    if message.stop_reason != "end_turn":
+        logger.warning("triage stopped unexpectedly: %s", message.stop_reason)
+        return ReviewReason.UNEXPECTED_STOP
+
+    # Structured output arrives as exactly one text block (thinking and fallback marker
+    # blocks may sit around it). Anything else is not an answer we can trust.
+    texts = [block.text for block in message.content if block.type == "text"]
+    if len(texts) != 1:
+        return ReviewReason.SCHEMA_INVALID
+    try:
+        return TriageOutput.model_validate_json(texts[0])
+    except ValidationError:
+        # The validation error can quote model text; log nothing but the fact.
+        logger.warning("triage output failed schema validation")
+        return ReviewReason.SCHEMA_INVALID
 
 
 def build_triage_model(settings: Settings) -> TriageModel:

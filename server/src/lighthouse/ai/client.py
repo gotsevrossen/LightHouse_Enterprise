@@ -22,6 +22,13 @@ from lighthouse.config import TRIAGE_MAX_RETRIES, Settings
 
 logger = logging.getLogger(__name__)
 
+# The SDK logs full request options (the prompt, i.e. attacker-controlled alert text) at
+# DEBUG on the `anthropic` logger, which inherits the root level when ANTHROPIC_LOG is
+# unset. A server run with root logging at DEBUG would then write alert evidence into the
+# logs (CLAUDE.md "Secrets": request bodies to Claude are not logged). Pin it.
+SDK_LOGGER_LEVEL = logging.WARNING
+logging.getLogger("anthropic").setLevel(SDK_LOGGER_LEVEL)
+
 
 def build_client(
     settings: Settings, *, http_client: anthropic.DefaultAsyncHttpxClient | None = None

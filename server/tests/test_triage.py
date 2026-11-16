@@ -9,9 +9,11 @@ from pydantic import ValidationError
 from lighthouse.severity import Severity
 from lighthouse.triage import (
     FixtureModel,
+    ReviewReason,
     TriageInput,
     TriageModel,
     TriageResult,
+    TriageUsage,
     apply_source_floor,
     needs_human_review_result,
     run_triage,
@@ -84,10 +86,38 @@ def test_triage_result_rejects_unknown_fields_and_bad_values() -> None:
 
 
 def test_needs_human_review_result_keeps_source_severity() -> None:
-    result = needs_human_review_result(Severity.HIGH)
+    result = needs_human_review_result(Severity.HIGH, reason=ReviewReason.REFUSAL)
     assert result.needs_human_review is True
+    assert result.review_reason is ReviewReason.REFUSAL
     assert result.severity is Severity.HIGH
     assert result.confidence == 0.0
+    assert result.reasoning is None
+    assert result.usage is None
+
+
+def test_review_flag_and_reason_must_agree() -> None:
+    with pytest.raises(ValidationError):
+        _result(Severity.LOW, needs_human_review=True)
+    with pytest.raises(ValidationError):
+        _result(Severity.LOW, review_reason="refusal")
+    assert _result(
+        Severity.LOW, needs_human_review=True, review_reason="refusal"
+    ).needs_human_review
+
+
+def test_only_cheap_failures_are_retried_on_the_next_ingestion() -> None:
+    # Outcomes alert content can provoke must not buy a fresh model call on every poll.
+    for reason in (
+        ReviewReason.REFUSAL,
+        ReviewReason.MAX_TOKENS,
+        ReviewReason.SCHEMA_INVALID,
+        ReviewReason.TIMEOUT,
+        ReviewReason.UNEXPECTED_STOP,
+        ReviewReason.INTERNAL_ERROR,
+    ):
+        assert not reason.retry_on_next_ingestion, reason
+    assert ReviewReason.BUDGET_EXCEEDED.retry_on_next_ingestion
+    assert ReviewReason.MODEL_UNAVAILABLE.retry_on_next_ingestion
 
 
 async def test_fixture_model_is_deterministic_and_does_not_echo_untrusted_text() -> None:
@@ -142,10 +172,26 @@ class _UnvalidatedModel:
 
 
 @pytest.mark.parametrize(
-    "model",
-    [_RaisingModel(), _SlowModel(), _WrongShapeModel(), _UnvalidatedModel()],
+    ("model", "reason"),
+    [
+        (_RaisingModel(), ReviewReason.INTERNAL_ERROR),
+        (_SlowModel(), ReviewReason.TIMEOUT),
+        (_WrongShapeModel(), ReviewReason.INTERNAL_ERROR),
+        (_UnvalidatedModel(), ReviewReason.INTERNAL_ERROR),
+    ],
     ids=["raises", "times-out", "wrong-shape", "unvalidated"],
 )
-async def test_model_failure_becomes_needs_human_review(model: TriageModel) -> None:
+async def test_model_failure_becomes_needs_human_review(
+    model: TriageModel, reason: ReviewReason
+) -> None:
     result = await run_triage(model, _alert(Severity.HIGH), timeout_seconds=0.05)
-    assert result == needs_human_review_result(Severity.HIGH)
+    # The call may have spent tokens nobody reported: recorded as an attempt with zeros.
+    assert result == needs_human_review_result(Severity.HIGH, reason=reason, usage=TriageUsage())
+
+
+async def test_needs_review_result_from_an_adapter_is_floored_too() -> None:
+    lowered = needs_human_review_result(Severity.INFO, reason=ReviewReason.REFUSAL)
+    model = FixtureModel({"a-1": lowered})
+    result = await run_triage(model, _alert(Severity.HIGH))
+    assert result.severity is Severity.HIGH
+    assert result.review_reason is ReviewReason.REFUSAL

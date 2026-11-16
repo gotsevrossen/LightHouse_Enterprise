@@ -1,0 +1,28 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#security/incidents(alerts())",
+  "value": [
+    {
+      "id": "1005",
+      "status": "inProgress",
+      "alerts": [
+        {
+          "id": "da-synthetic-0004",
+          "incidentId": "1005",
+          "tenantId": "{directory}",
+          "severity": "unknown",
+          "title": "Synthetic alert with an unrated severity",
+          "createdDateTime": "2026-11-10T09:00:00Z",
+          "serviceSource": "microsoftDefenderForIdentity"
+        },
+        {
+          "id": "da-synthetic-0005",
+          "incidentId": "1005",
+          "tenantId": "{directory}",
+          "severity": "unknownFutureValue",
+          "title": "Synthetic alert with a severity added after this client",
+          "createdDateTime": "2026-11-10T09:01:00Z"
+        }
+      ]
+    }
+  ]
+}

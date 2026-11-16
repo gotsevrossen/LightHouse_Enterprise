@@ -134,15 +134,17 @@ def _fit_value(raw: object) -> tuple[EvidenceValue, bool]:
             if not isinstance(item, str):
                 # A list is a list of strings; anything else is a connector bug.
                 msg = "evidence list items must be strings"
-                raise TypeError(msg)
+                raise ValueError(msg)  # noqa: TRY004 - pydantic only converts ValueError
             capped = cap_text(item, MAX_EVIDENCE_LIST_ITEM_CHARS)
             cut = cut or capped != item
             out.append(capped)
         return out, cut
     # Dicts and other objects are refused: evidence is flat by design, and silently
     # stringifying an object would copy raw source structure into the projection.
+    # ValueError, not TypeError: pydantic turns only ValueError/AssertionError raised in a
+    # validator into a ValidationError, and callers rely on getting one.
     msg = "evidence values must be a string, number, boolean, null or list of strings"
-    raise TypeError(msg)
+    raise ValueError(msg)
 
 
 def fit_evidence(raw: Mapping[str, object]) -> dict[str, EvidenceValue]:
@@ -151,7 +153,7 @@ def fit_evidence(raw: Mapping[str, object]) -> dict[str, EvidenceValue]:
     Keys are kept in the order given, so a connector lists its most useful fields first:
     when the total budget runs out, later keys are dropped and the result is marked.
     """
-    if len(raw) > MAX_EVIDENCE_KEYS:
+    if len(raw) - (EVIDENCE_TRUNCATED_KEY in raw) > MAX_EVIDENCE_KEYS:
         msg = f"evidence has more than {MAX_EVIDENCE_KEYS} keys"
         raise ValueError(msg)
     marker_bytes = _entry_bytes(EVIDENCE_TRUNCATED_KEY, True)  # noqa: FBT003 - a value
@@ -160,8 +162,13 @@ def fit_evidence(raw: Mapping[str, object]) -> dict[str, EvidenceValue]:
     truncated = False
     for key, value in raw.items():
         if key == EVIDENCE_TRUNCATED_KEY:
-            msg = f"evidence key {EVIDENCE_TRUNCATED_KEY!r} is reserved"
-            raise ValueError(msg)
+            # A connector that cut data in its own projection says so with `True`; the
+            # marker is always placed last, inside the reserved budget.
+            if value is not True:
+                msg = f"evidence key {EVIDENCE_TRUNCATED_KEY!r} is reserved (only True)"
+                raise ValueError(msg)
+            truncated = True
+            continue
         if len(key) > MAX_EVIDENCE_KEY_CHARS or not _KEY_RE.fullmatch(key):
             msg = "evidence keys must be short lowercase identifiers"
             raise ValueError(msg)

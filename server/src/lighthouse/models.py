@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 from lighthouse.auth import Role
 from lighthouse.severity import Severity
+from lighthouse.triage import ReviewReason
 
 
 class AlertStatus(Enum):
@@ -53,6 +54,24 @@ class AlertOut(_Out):
     needs_human_review: bool
     created_at: datetime
     updated_at: datetime
+    # Phase 1 triage fields. All nullable: an alert may not have been triaged yet.
+    category: str | None
+    occurred_at: datetime | None
+    confidence: float | None
+    review_reason: ReviewReason | None
+    triaged_at: datetime | None
+
+
+class AlertDetailOut(AlertOut):
+    """`GET /api/alerts/{id}` for analyst and above.
+
+    `evidence` is attacker-controlled text from the customer's systems, and `reasoning`
+    is model text about it; both are for people trained to read them as such. Viewers get
+    `AlertOut`, the plain-English fields only. Enforced in the route, not the console.
+    """
+
+    evidence: dict[str, JsonValue]
+    reasoning: str | None
 
 
 class AlertPage(_Out):

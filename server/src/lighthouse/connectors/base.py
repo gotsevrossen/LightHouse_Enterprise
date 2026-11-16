@@ -20,7 +20,7 @@ from lighthouse.ingest.schema import NormalizedAlert
 
 # Mirrors the CHECK constraint on lh.connections.credential_ref: a reference, never a secret.
 CREDENTIAL_REF_RE: Final = re.compile(r"vault:[a-z0-9][a-z0-9_-]{0,63}")
-# x5t#S256: unpadded base64url of a 32-byte SHA-256 digest is exactly 43 characters.
+# The x5t#S256 thumbprint is unpadded base64url of a 32-byte digest: 43 characters.
 _THUMBPRINT_RE: Final = re.compile(r"[A-Za-z0-9_-]{43}")
 
 
