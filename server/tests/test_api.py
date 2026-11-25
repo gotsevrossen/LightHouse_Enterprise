@@ -20,7 +20,7 @@ from lighthouse.config import Settings
 from lighthouse.db import UnsafeDatabaseConfigError, create_pool
 from lighthouse.main import create_app
 from lighthouse.routes.alerts import GET_ALERT_SQL, LIST_ALERTS_SQL
-from tests.helpers import Conn, TokenFactory, bearer, create_alert, create_tenant
+from tests.helpers import Conn, MemberTokens, TokenFactory, bearer, create_alert, create_tenant
 
 
 @dataclass(frozen=True)
@@ -128,10 +128,10 @@ async def test_token_signed_by_another_key_is_401(
 
 
 async def test_me_returns_principal(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants
 ) -> None:
     user_id = uuid4()
-    token = tokens.token(two_tenants.tenant_a, role="analyst", user_id=user_id)
+    token = await members.token(two_tenants.tenant_a, role="analyst", user_id=user_id)
     response = await client.get("/api/me", headers=bearer(token))
     assert response.status_code == 200
     assert response.json() == {
@@ -153,19 +153,19 @@ async def test_me_for_unknown_tenant_is_403(
 
 
 async def test_tenant_a_lists_only_its_alerts(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants
 ) -> None:
-    items = await _list_all(client, tokens.token(two_tenants.tenant_a))
+    items = await _list_all(client, await members.token(two_tenants.tenant_a))
     assert {UUID(item["id"]) for item in items} == two_tenants.alerts_a
 
-    items = await _list_all(client, tokens.token(two_tenants.tenant_b))
+    items = await _list_all(client, await members.token(two_tenants.tenant_b))
     assert {UUID(item["id"]) for item in items} == two_tenants.alerts_b
 
 
 async def test_tenant_a_gets_404_for_tenant_b_alert(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants
 ) -> None:
-    token_a = tokens.token(two_tenants.tenant_a, role="admin")
+    token_a = await members.token(two_tenants.tenant_a, role="admin")
     for alert_b in two_tenants.alerts_b:
         response = await client.get(f"/api/alerts/{alert_b}", headers=bearer(token_a))
         assert response.status_code == 404
@@ -192,10 +192,10 @@ async def test_route_sql_alone_would_leak(superuser: Conn, two_tenants: TwoTenan
 
 
 async def test_invalid_alert_id_is_422(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants
 ) -> None:
     response = await client.get(
-        "/api/alerts/not-a-uuid", headers=bearer(tokens.token(two_tenants.tenant_a))
+        "/api/alerts/not-a-uuid", headers=bearer(await members.token(two_tenants.tenant_a))
     )
     assert response.status_code == 422
 
@@ -204,9 +204,9 @@ async def test_invalid_alert_id_is_422(
 
 
 async def test_alert_shape_matches_web_contract(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants
 ) -> None:
-    items = await _list_all(client, tokens.token(two_tenants.tenant_b))
+    items = await _list_all(client, await members.token(two_tenants.tenant_b))
     item = items[0]
     expected = {
         "id",
@@ -234,11 +234,11 @@ async def test_alert_shape_matches_web_contract(
 
 
 async def test_pagination_walks_every_alert_once(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     created = {await create_alert(superuser, tenant, title=f"P{i}") for i in range(5)}
-    token = tokens.token(tenant)
+    token = await members.token(tenant)
 
     seen: list[str] = []
     cursor: str | None = None
@@ -264,22 +264,24 @@ async def test_pagination_walks_every_alert_once(
 
 @pytest.mark.parametrize("cursor", ["!!!", "bm90LWEtY3Vyc29y", "x" * 201])
 async def test_bad_cursor_is_rejected(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants, cursor: str
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants, cursor: str
 ) -> None:
     response = await client.get(
         "/api/alerts",
         params={"cursor": cursor},
-        headers=bearer(tokens.token(two_tenants.tenant_a)),
+        headers=bearer(await members.token(two_tenants.tenant_a)),
     )
     assert response.status_code in {400, 422}
 
 
 @pytest.mark.parametrize("limit", [0, -1, 201])
 async def test_limit_is_bounded(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants, limit: int
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants, limit: int
 ) -> None:
     response = await client.get(
-        "/api/alerts", params={"limit": limit}, headers=bearer(tokens.token(two_tenants.tenant_a))
+        "/api/alerts",
+        params={"limit": limit},
+        headers=bearer(await members.token(two_tenants.tenant_a)),
     )
     assert response.status_code == 422
 
@@ -289,16 +291,16 @@ async def test_limit_is_bounded(
 
 @pytest.mark.parametrize("role", ["viewer", "analyst", "responder"])
 async def test_audit_log_requires_admin(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants, role: str
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants, role: str
 ) -> None:
     response = await client.get(
-        "/api/audit", headers=bearer(tokens.token(two_tenants.tenant_a, role=role))
+        "/api/audit", headers=bearer(await members.token(two_tenants.tenant_a, role=role))
     )
     assert response.status_code == 403
 
 
 async def test_admin_reads_only_own_audit_log_and_the_read_is_audited(
-    client: httpx.AsyncClient, tokens: TokenFactory, two_tenants: TwoTenants, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, two_tenants: TwoTenants, superuser: Conn
 ) -> None:
     for tenant, action in ((two_tenants.tenant_a, "seed.a"), (two_tenants.tenant_b, "seed.b")):
         await superuser.execute(
@@ -307,7 +309,7 @@ async def test_admin_reads_only_own_audit_log_and_the_read_is_audited(
             action,
         )
     admin_id = uuid4()
-    token = tokens.token(two_tenants.tenant_a, role="admin", user_id=admin_id)
+    token = await members.token(two_tenants.tenant_a, role="admin", user_id=admin_id)
     response = await client.get("/api/audit", headers=bearer(token))
     assert response.status_code == 200
     actions = {item["action"] for item in response.json()["items"]}

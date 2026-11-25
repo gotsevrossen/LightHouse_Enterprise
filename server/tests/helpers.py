@@ -109,6 +109,46 @@ def bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def set_membership(conn: Conn, tenant_id: UUID, user_id: UUID, role: str) -> None:
+    """Make `user_id` a member of `tenant_id` with `role`, or change their role.
+
+    `conn` must bypass RLS (the superuser fixture): lh_app cannot write memberships."""
+    await conn.execute(
+        """
+        insert into lh.memberships (tenant_id, user_id, role) values ($1, $2, $3)
+        on conflict (tenant_id, user_id) do update set role = excluded.role
+        """,
+        tenant_id,
+        user_id,
+        role,
+    )
+
+
+async def remove_membership(conn: Conn, tenant_id: UUID, user_id: UUID) -> None:
+    await conn.execute(
+        "delete from lh.memberships where tenant_id = $1 and user_id = $2", tenant_id, user_id
+    )
+
+
+@dataclass(frozen=True)
+class MemberTokens:
+    """Tokens for people who really are members of the tenant their token names.
+
+    The API checks every request against lh.memberships, so a token alone is no longer
+    enough; this seeds the matching row (same tenant, user and role) and returns the token.
+    Use `TokenFactory` directly only to test what a non-member gets."""
+
+    tokens: TokenFactory
+    conn: Conn
+
+    async def token(
+        self, tenant_id: UUID, role: str = "viewer", user_id: UUID | None = None
+    ) -> str:
+        user = user_id or uuid4()
+        await set_membership(self.conn, tenant_id, user, role)
+        return self.tokens.token(tenant_id, role=role, user_id=user)
+
+
 async def create_tenant(conn: Conn, name: str = "Example Tenant") -> UUID:
     tenant_id = uuid4()
     await conn.execute("insert into lh.tenants (id, name) values ($1, $2)", tenant_id, name)

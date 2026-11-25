@@ -26,7 +26,7 @@ from lighthouse.routes.chat import ChatJob, chat_events
 from lighthouse.triage import TriageUsage
 from tests.ai_helpers import StubAnthropic, error
 from tests.chat_helpers import api, ndjson, respond_stream, stream_events
-from tests.helpers import Conn, TokenFactory, bearer, create_alert, create_tenant
+from tests.helpers import Conn, MemberTokens, bearer, create_alert, create_tenant
 
 QUESTION_MARKER = "QMARK-5d1c"
 ANSWER_MARKER = "AMARK-a07e"
@@ -106,10 +106,10 @@ async def alert_with_detail(superuser: Conn, tenant: UUID) -> UUID:
 
 
 async def test_status_reports_availability(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
-    token = tokens.token(tenant, role="viewer")
+    token = await members.token(tenant, role="viewer")
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
         response = await http.get("/api/chat/status", headers=bearer(token))
@@ -127,13 +127,13 @@ async def test_status_reports_availability(
 
 
 async def test_success_streams_deltas_then_done_and_meters(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     user = uuid4()
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events = events_of(await ask(http, tokens.token(tenant, user_id=user)))
+        events = events_of(await ask(http, await members.token(tenant, user_id=user)))
     assert events[-1] == {"type": "done"}
     assert deltas(events) == f"Answer {ANSWER_MARKER} continues."
     assert await usage_rows(superuser, tenant) == [
@@ -180,7 +180,7 @@ async def test_success_streams_deltas_then_done_and_meters(
 async def test_abnormal_stop_ends_with_error_after_partial_text(
     *,
     settings: Settings,
-    tokens: TokenFactory,
+    members: MemberTokens,
     superuser: Conn,
     stream_kwargs: dict[str, Any],
     code: str,
@@ -189,7 +189,7 @@ async def test_abnormal_stop_ends_with_error_after_partial_text(
     tenant = await create_tenant(superuser)
     stub = answer_stream(**stream_kwargs)
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events = events_of(await ask(http, tokens.token(tenant)))
+        events = events_of(await ask(http, await members.token(tenant)))
     # The partial text was already sent; the terminal event says it is not a full answer.
     assert deltas(events) == f"Answer {ANSWER_MARKER} continues."
     assert events[-1] == {"type": "error", "code": code}  # nothing but the code
@@ -211,7 +211,7 @@ async def test_abnormal_stop_ends_with_error_after_partial_text(
 async def test_api_errors_end_with_error_and_no_text(
     *,
     settings: Settings,
-    tokens: TokenFactory,
+    members: MemberTokens,
     superuser: Conn,
     handler: Any,
     code: str,
@@ -220,7 +220,7 @@ async def test_api_errors_end_with_error_and_no_text(
     tenant = await create_tenant(superuser)
     stub = StubAnthropic(handler)
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events = events_of(await ask(http, tokens.token(tenant)))
+        events = events_of(await ask(http, await members.token(tenant)))
     assert events == [{"type": "start"}, {"type": "error", "code": code}]
     (usage,) = await usage_rows(superuser, tenant)
     assert usage["outcome"] == outcome
@@ -228,7 +228,7 @@ async def test_api_errors_end_with_error_and_no_text(
 
 
 async def test_timeout_ends_unavailable(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     import httpx2  # noqa: PLC0415 - only this test needs the SDK's transport errors
 
@@ -240,7 +240,7 @@ async def test_timeout_ends_unavailable(
     tenant = await create_tenant(superuser)
     stub = StubAnthropic(handler)
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events = events_of(await ask(http, tokens.token(tenant)))
+        events = events_of(await ask(http, await members.token(tenant)))
     assert events == [{"type": "start"}, {"type": "error", "code": "unavailable"}]
     (usage,) = await usage_rows(superuser, tenant)
     assert usage["outcome"] == "timeout"
@@ -248,12 +248,12 @@ async def test_timeout_ends_unavailable(
 
 @pytest.mark.parametrize("enabled", [True, False], ids=["no-key", "disabled"])
 async def test_no_model_ends_unavailable_without_a_call_or_usage(
-    *, settings: Settings, tokens: TokenFactory, superuser: Conn, enabled: bool
+    *, settings: Settings, members: MemberTokens, superuser: Conn, enabled: bool
 ) -> None:
     tenant = await create_tenant(superuser)
     configured = chat_config(settings, chat_enabled=enabled)
     async with api(configured, AnthropicChatModel(None, configured)) as http:
-        events = events_of(await ask(http, tokens.token(tenant)))
+        events = events_of(await ask(http, await members.token(tenant)))
     assert events == [{"type": "start"}, {"type": "error", "code": "unavailable"}]
     assert await usage_rows(superuser, tenant) == []
     (row,) = await audit_rows(superuser, tenant)
@@ -264,7 +264,7 @@ async def test_no_model_ends_unavailable_without_a_call_or_usage(
 
 
 async def test_budget_exceeded_makes_no_call(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     await superuser.execute(
@@ -275,7 +275,7 @@ async def test_budget_exceeded_makes_no_call(
     configured = chat_config(settings, triage_daily_token_budget_per_tenant=1000)
     stub = answer_stream()
     async with api(configured, AnthropicChatModel(stub.client(), configured)) as http:
-        events = events_of(await ask(http, tokens.token(tenant)))
+        events = events_of(await ask(http, await members.token(tenant)))
     assert events == [{"type": "start"}, {"type": "error", "code": "budget_exceeded"}]
     assert stub.requests == []
     assert [r["purpose"] for r in await usage_rows(superuser, tenant)] == ["triage"]
@@ -284,13 +284,13 @@ async def test_budget_exceeded_makes_no_call(
 
 
 async def test_chat_spend_counts_against_the_shared_budget(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     # One answer costs 210 + 77 + 1500 + 40 = 1827 tokens; the budget allows one.
     configured = chat_config(settings, triage_daily_token_budget_per_tenant=1827)
     stub = answer_stream()
-    token = tokens.token(tenant)
+    token = await members.token(tenant)
     async with api(configured, AnthropicChatModel(stub.client(), configured)) as http:
         assert events_of(await ask(http, token))[-1] == {"type": "done"}
         second = events_of(await ask(http, token))
@@ -299,17 +299,17 @@ async def test_chat_spend_counts_against_the_shared_budget(
 
 
 async def test_rate_limit_per_user_is_enforced_and_audited_once(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     configured = chat_config(settings, chat_requests_per_minute_per_user=2)
     stub = answer_stream()
     limited_user, other_user = uuid4(), uuid4()
-    limited = tokens.token(tenant, user_id=limited_user)
+    limited = await members.token(tenant, user_id=limited_user)
     async with api(configured, AnthropicChatModel(stub.client(), configured)) as http:
         results = [events_of(await ask(http, limited))[-1] for _ in range(4)]
         # Another user of the same tenant has their own allowance.
-        other = events_of(await ask(http, tokens.token(tenant, user_id=other_user)))[-1]
+        other = events_of(await ask(http, await members.token(tenant, user_id=other_user)))[-1]
     assert results == [
         {"type": "done"},
         {"type": "done"},
@@ -325,12 +325,12 @@ async def test_rate_limit_per_user_is_enforced_and_audited_once(
 
 
 async def test_rate_limit_holds_across_server_replicas(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     configured = chat_config(settings, chat_requests_per_minute_per_user=1)
     stub = answer_stream()
-    token = tokens.token(tenant)
+    token = await members.token(tenant)
     async with (
         api(configured, AnthropicChatModel(stub.client(), configured)) as replica_a,
         api(configured, AnthropicChatModel(stub.client(), configured)) as replica_b,
@@ -342,12 +342,12 @@ async def test_rate_limit_holds_across_server_replicas(
 
 
 async def test_concurrent_requests_are_counted_exactly(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     configured = chat_config(settings, chat_requests_per_minute_per_user=3)
     stub = answer_stream()
-    token = tokens.token(tenant)
+    token = await members.token(tenant)
     async with api(configured, AnthropicChatModel(stub.client(), configured)) as http:
         responses = await asyncio.gather(*(ask(http, token) for _ in range(6)))
     terminals = [events_of(r)[-1] for r in responses]
@@ -359,13 +359,13 @@ async def test_concurrent_requests_are_counted_exactly(
 
 
 async def test_viewer_context_excludes_evidence_and_reasoning(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await alert_with_detail(superuser, tenant)
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events = events_of(await ask(http, tokens.token(tenant), alert_id=str(alert_id)))
+        events = events_of(await ask(http, await members.token(tenant), alert_id=str(alert_id)))
     assert events[-1] == {"type": "done"}
     sent = json.dumps(stub.bodies[0])
     assert "Encoded PowerShell launched" in sent
@@ -379,27 +379,27 @@ async def test_viewer_context_excludes_evidence_and_reasoning(
 
 @pytest.mark.parametrize("role", ["analyst", "responder", "admin"])
 async def test_analyst_context_includes_evidence_and_reasoning(
-    settings: Settings, tokens: TokenFactory, superuser: Conn, role: str
+    settings: Settings, members: MemberTokens, superuser: Conn, role: str
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await alert_with_detail(superuser, tenant)
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events_of(await ask(http, tokens.token(tenant, role=role), alert_id=str(alert_id)))
+        events_of(await ask(http, await members.token(tenant, role=role), alert_id=str(alert_id)))
     sent = json.dumps(stub.bodies[0])
     assert EVIDENCE_MARKER in sent
     assert REASONING_MARKER in sent
 
 
 async def test_without_alert_id_no_alert_data_is_sent(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser, "Example Tenant Name-9d2e")
     await alert_with_detail(superuser, tenant)
     user = uuid4()
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        events_of(await ask(http, tokens.token(tenant, role="admin", user_id=user)))
+        events_of(await ask(http, await members.token(tenant, role="admin", user_id=user)))
     sent = json.dumps(stub.bodies[0])
     for absent in (
         "Encoded PowerShell launched",
@@ -414,7 +414,7 @@ async def test_without_alert_id_no_alert_data_is_sent(
 
 
 async def test_other_tenants_alert_is_404_and_never_sent(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant_a = await create_tenant(superuser, "Example Tenant A")
     tenant_b = await create_tenant(superuser, "Example Tenant B")
@@ -422,7 +422,9 @@ async def test_other_tenants_alert_is_404_and_never_sent(
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
         for alert_id in (alert_b, uuid4()):
-            response = await ask(http, tokens.token(tenant_a, role="admin"), alert_id=str(alert_id))
+            response = await ask(
+                http, await members.token(tenant_a, role="admin"), alert_id=str(alert_id)
+            )
             assert response.status_code == 404
             assert response.json() == {"detail": "not found"}
     assert stub.requests == []
@@ -452,19 +454,19 @@ INVALID_BODIES: list[tuple[str, dict[str, Any]]] = [
 
 @pytest.mark.parametrize("body", [b for _, b in INVALID_BODIES], ids=[n for n, _ in INVALID_BODIES])
 async def test_invalid_bodies_are_rejected_before_streaming(
-    settings: Settings, tokens: TokenFactory, superuser: Conn, body: dict[str, Any]
+    settings: Settings, members: MemberTokens, superuser: Conn, body: dict[str, Any]
 ) -> None:
     tenant = await create_tenant(superuser)
     stub = answer_stream()
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        response = await ask(http, tokens.token(tenant), body)
+        response = await ask(http, await members.token(tenant), body)
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/json"
     assert stub.requests == []
 
 
 async def test_limits_at_the_boundary_are_accepted(
-    settings: Settings, tokens: TokenFactory, superuser: Conn
+    settings: Settings, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     stub = answer_stream()
@@ -477,7 +479,7 @@ async def test_limits_at_the_boundary_are_accepted(
         ],
     }
     async with api(settings, AnthropicChatModel(stub.client(), settings)) as http:
-        assert events_of(await ask(http, tokens.token(tenant), body))[-1] == {"type": "done"}
+        assert events_of(await ask(http, await members.token(tenant), body))[-1] == {"type": "done"}
 
 
 async def test_chat_requires_authentication(settings: Settings) -> None:
@@ -493,14 +495,14 @@ async def test_chat_requires_authentication(settings: Settings) -> None:
 
 async def test_question_and_answer_text_is_not_stored_or_logged(
     settings: Settings,
-    tokens: TokenFactory,
+    members: MemberTokens,
     superuser: Conn,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
     tenant = await create_tenant(superuser)
     alert_id = await alert_with_detail(superuser, tenant)
-    token = tokens.token(tenant, role="analyst")
+    token = await members.token(tenant, role="analyst")
     body = {
         "question": f"Why? {QUESTION_MARKER}",
         "alert_id": str(alert_id),

@@ -145,14 +145,29 @@ Fencing and escaping are shared with triage in `lighthouse/ai/fence.py`.
   (`viewer` < `analyst` < `responder` < `admin`). `user_metadata` is never read, because
   users can edit it. Missing or malformed claims give 401/403, never a default tenant.
 - Anonymous Supabase users are refused.
-- Roles are checked on the server with `require_role(...)`.
+- **Membership check on every request.** After the token is verified, `get_principal`
+  reads the caller's row in `lh.memberships` (one query, through `tenant_transaction`, so
+  RLS limits it to the token's tenant). No row (removed, or the token names a tenant the
+  user does not belong to) is 403 `forbidden`, the same body as any other refusal. A
+  database failure during the lookup is 503 `unavailable`, never access. Membership is
+  not cached in the process: a cache would reopen the window this check closes.
+- **Effective role = the lower of the token's role and the membership row's role.**
+  Demotion and removal take effect on the next request; promotion takes effect once the
+  person's token is refreshed with the new claim. `/api/me` reports the effective role.
+- Roles are checked on the server with `require_role(...)`, against the effective role.
+  Routes depend on `get_principal` or `require_role`; the token-only check
+  (`_token_principal`) is private, and `tests/test_membership.py` fails if any
+  authenticated route reaches it without going through `get_principal`.
+- Tests: `members.token(tenant, role=...)` (fixture in `tests/conftest.py`) seeds the
+  membership row and returns the matching token; use the raw `tokens` factory only to
+  test what a non-member gets.
 
 ## Routes
 
 | Route | Auth | Notes |
 | --- | --- | --- |
 | `GET /healthz` | none | `{"status": "ok"}`, nothing else. |
-| `GET /api/me` | viewer | `{user_id, tenant_id, tenant_name, role}`; 403 if the tenant does not exist. |
+| `GET /api/me` | viewer | `{user_id, tenant_id, tenant_name, role}` with the effective role (see "Auth model"); 403 if the tenant does not exist or the user is not a member. |
 | `GET /api/alerts?limit=&cursor=` | viewer | `{items, next_cursor}`, newest first, keyset cursor, `limit` 1-200. |
 | `GET /api/alerts/{id}` | viewer | 404 for another tenant's id, same as a missing id. Analyst and above also get `evidence` and the model's `reasoning`. |
 | `PATCH /api/alerts/{id}` | analyst | Body `{"status": "new"\|"triaged"\|"investigating"\|"resolved"\|"dismissed"}`, nothing else (422). Returns the `GET` body for the caller's role. Audited as `alert.status_changed` with `from`/`to`; a no-op writes nothing. |

@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-from tests.helpers import Conn, TokenFactory, bearer, create_alert, create_tenant
+from tests.helpers import Conn, MemberTokens, bearer, create_alert, create_tenant
 
 ALL_STATUSES = ("new", "triaged", "investigating", "resolved", "dismissed")
 
@@ -43,12 +43,12 @@ async def stored(superuser: Conn, alert_id: UUID) -> dict[str, Any]:
 
 @pytest.mark.parametrize("role", ["analyst", "responder", "admin"])
 async def test_analyst_and_above_can_change_status(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, role: str
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, role: str
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
     user = uuid4()
-    token = tokens.token(tenant, role=role, user_id=user)
+    token = await members.token(tenant, role=role, user_id=user)
     response = await patch(client, token, alert_id, {"status": "investigating"})
     assert response.status_code == 200, response.text
     body = response.json()
@@ -70,12 +70,12 @@ async def test_analyst_and_above_can_change_status(
 
 
 async def test_viewer_cannot_change_status(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
     response = await patch(
-        client, tokens.token(tenant, role="viewer"), alert_id, {"status": "dismissed"}
+        client, await members.token(tenant, role="viewer"), alert_id, {"status": "dismissed"}
     )
     assert response.status_code == 403
     assert (await stored(superuser, alert_id))["status"] == "new"
@@ -90,12 +90,12 @@ async def test_requires_authentication(client: httpx.AsyncClient, superuser: Con
 
 
 async def test_other_tenants_alert_is_404_and_unchanged(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant_a = await create_tenant(superuser, "Example Tenant A")
     tenant_b = await create_tenant(superuser, "Example Tenant B")
     alert_b = await create_alert(superuser, tenant_b)
-    token_a = tokens.token(tenant_a, role="admin")
+    token_a = await members.token(tenant_a, role="admin")
     for alert_id in (alert_b, uuid4()):
         response = await patch(client, token_a, alert_id, {"status": "dismissed"})
         assert response.status_code == 404
@@ -107,25 +107,25 @@ async def test_other_tenants_alert_is_404_and_unchanged(
 
 @pytest.mark.parametrize("new_status", ALL_STATUSES)
 async def test_every_status_value_is_accepted(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, new_status: str
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, new_status: str
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
     await superuser.execute("update lh.alerts set status = 'resolved' where id = $1", alert_id)
     response = await patch(
-        client, tokens.token(tenant, role="analyst"), alert_id, {"status": new_status}
+        client, await members.token(tenant, role="analyst"), alert_id, {"status": new_status}
     )
     assert response.status_code == 200
     assert response.json()["status"] == new_status
 
 
 async def test_unchanged_status_writes_and_audits_nothing(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
     before = await superuser.fetchval("select updated_at from lh.alerts where id = $1", alert_id)
-    token = tokens.token(tenant, role="analyst")
+    token = await members.token(tenant, role="analyst")
     response = await patch(client, token, alert_id, {"status": "new"})
     assert response.status_code == 200
     assert response.json()["status"] == "new"
@@ -136,11 +136,11 @@ async def test_unchanged_status_writes_and_audits_nothing(
 
 
 async def test_successive_changes_audit_each_transition(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
-    token = tokens.token(tenant, role="responder")
+    token = await members.token(tenant, role="responder")
     for new_status in ("investigating", "resolved", "new"):
         assert (await patch(client, token, alert_id, {"status": new_status})).status_code == 200
     transitions = [r["detail"] for r in await status_audit(superuser, tenant)]
@@ -166,35 +166,37 @@ INVALID: list[tuple[str, Any]] = [
 
 @pytest.mark.parametrize("body", [b for _, b in INVALID], ids=[n for n, _ in INVALID])
 async def test_only_a_valid_status_is_accepted_and_nothing_else_changes(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, body: Any
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, body: Any
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant, source_severity="high")
     before = await stored(superuser, alert_id)
-    response = await patch(client, tokens.token(tenant, role="admin"), alert_id, body)
+    response = await patch(client, await members.token(tenant, role="admin"), alert_id, body)
     assert response.status_code == 422
     assert await stored(superuser, alert_id) == before
     assert await status_audit(superuser, tenant) == []
 
 
 async def test_bad_alert_id_is_422(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     response = await patch(
-        client, tokens.token(tenant, role="admin"), "not-a-uuid", {"status": "resolved"}
+        client, await members.token(tenant, role="admin"), "not-a-uuid", {"status": "resolved"}
     )
     assert response.status_code == 422
 
 
 async def test_viewer_still_gets_plain_view_from_get_after_a_change(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await create_alert(superuser, tenant)
-    await patch(client, tokens.token(tenant, role="analyst"), alert_id, {"status": "resolved"})
+    await patch(
+        client, await members.token(tenant, role="analyst"), alert_id, {"status": "resolved"}
+    )
     viewer = await client.get(
-        f"/api/alerts/{alert_id}", headers=bearer(tokens.token(tenant, role="viewer"))
+        f"/api/alerts/{alert_id}", headers=bearer(await members.token(tenant, role="viewer"))
     )
     assert viewer.json()["status"] == "resolved"
     assert not {"evidence", "reasoning"} & set(viewer.json())

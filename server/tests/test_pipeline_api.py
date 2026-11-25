@@ -19,7 +19,7 @@ from lighthouse.main import create_app
 from lighthouse.severity import Severity
 from lighthouse.triage import ReviewReason, TriageInput
 from tests.ai_helpers import StubAnthropic, answer, normalized, respond_text, triage_settings
-from tests.helpers import Conn, TokenFactory, bearer, create_tenant
+from tests.helpers import Conn, MemberTokens, bearer, create_tenant
 
 TRIAGE_FIELDS = {"category", "occurred_at", "confidence", "review_reason", "triaged_at"}
 ANALYST_ONLY = {"evidence", "reasoning"}
@@ -50,11 +50,11 @@ async def _get(client: httpx.AsyncClient, token: str, path: str) -> dict[str, An
 
 
 async def test_list_exposes_triage_fields_but_never_evidence_or_reasoning(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, app_pool: Pool
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, app_pool: Pool
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await _triaged_alert(app_pool, tenant)
-    body = await _get(client, tokens.token(tenant, role="admin"), "/api/alerts")
+    body = await _get(client, await members.token(tenant, role="admin"), "/api/alerts")
     (item,) = body["items"]
     assert item["id"] == str(alert_id)
     assert set(item) >= TRIAGE_FIELDS
@@ -70,23 +70,23 @@ async def test_list_exposes_triage_fields_but_never_evidence_or_reasoning(
 
 @pytest.mark.parametrize("role", ["analyst", "responder", "admin"])
 async def test_detail_includes_evidence_and_reasoning_for_analyst_and_above(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, app_pool: Pool, role: str
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, app_pool: Pool, role: str
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await _triaged_alert(app_pool, tenant)
-    item = await _get(client, tokens.token(tenant, role=role), f"/api/alerts/{alert_id}")
+    item = await _get(client, await members.token(tenant, role=role), f"/api/alerts/{alert_id}")
     assert item["evidence"] == {"command_line": "powershell -enc AAAA", "host_name": "host-7"}
     assert item["reasoning"] == "Analyst rationale."
     assert set(item) >= TRIAGE_FIELDS
 
 
 async def test_detail_for_viewer_has_plain_english_fields_only(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, app_pool: Pool
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, app_pool: Pool
 ) -> None:
     tenant = await create_tenant(superuser)
     alert_id = await _triaged_alert(app_pool, tenant)
     response = await client.get(
-        f"/api/alerts/{alert_id}", headers=bearer(tokens.token(tenant, role="viewer"))
+        f"/api/alerts/{alert_id}", headers=bearer(await members.token(tenant, role="viewer"))
     )
     assert response.status_code == 200
     item = response.json()
@@ -99,27 +99,27 @@ async def test_detail_for_viewer_has_plain_english_fields_only(
 
 
 async def test_detail_is_still_tenant_scoped_for_analysts(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, app_pool: Pool
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, app_pool: Pool
 ) -> None:
     tenant_a = await create_tenant(superuser)
     tenant_b = await create_tenant(superuser)
     alert_a = await _triaged_alert(app_pool, tenant_a)
     response = await client.get(
-        f"/api/alerts/{alert_a}", headers=bearer(tokens.token(tenant_b, role="admin"))
+        f"/api/alerts/{alert_a}", headers=bearer(await members.token(tenant_b, role="admin"))
     )
     assert response.status_code == 404
     assert "powershell" not in response.text
 
 
 async def test_needs_review_alert_shape(
-    client: httpx.AsyncClient, tokens: TokenFactory, superuser: Conn, app_pool: Pool
+    client: httpx.AsyncClient, members: MemberTokens, superuser: Conn, app_pool: Pool
 ) -> None:
     tenant = await create_tenant(superuser)
     outcome = await ingest_alert(
         app_pool, tenant, normalized(), AnthropicTriageModel(None, triage_settings())
     )
     item = await _get(
-        client, tokens.token(tenant, role="analyst"), f"/api/alerts/{outcome.alert_id}"
+        client, await members.token(tenant, role="analyst"), f"/api/alerts/{outcome.alert_id}"
     )
     assert item["needs_human_review"] is True
     assert item["review_reason"] == ReviewReason.MODEL_UNAVAILABLE.value
@@ -132,7 +132,7 @@ async def test_server_starts_and_serves_without_an_anthropic_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     settings: Settings,
-    tokens: TokenFactory,
+    members: MemberTokens,
     superuser: Conn,
 ) -> None:
     for name in ANTHROPIC_ENV:
@@ -140,7 +140,7 @@ async def test_server_starts_and_serves_without_an_anthropic_key(
     monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path / "none"))
     monkeypatch.setenv("HOME", str(tmp_path))
     tenant = await create_tenant(superuser)
-    token = tokens.token(tenant, role="analyst")
+    token = await members.token(tenant, role="analyst")
 
     app = create_app(settings)
     async with (

@@ -30,7 +30,7 @@ from pydantic import SecretStr
 from lighthouse.config import Settings
 from lighthouse.db import Pool, create_pool
 from lighthouse.main import create_app
-from tests.helpers import TEST_AUDIENCE, TEST_ISSUER, TokenFactory
+from tests.helpers import TEST_AUDIENCE, TEST_ISSUER, MemberTokens, TokenFactory
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = SERVER_DIR.parent / "supabase" / "migrations"
@@ -266,6 +266,12 @@ async def app_conn(
 @pytest.fixture(scope="session")
 def tokens() -> TokenFactory:
     return TokenFactory.generate()
+
+
+@pytest.fixture
+def members(tokens: TokenFactory, superuser: asyncpg.Connection[asyncpg.Record]) -> MemberTokens:
+    """Tokens whose holder has the matching lh.memberships row (see MemberTokens)."""
+    return MemberTokens(tokens=tokens, conn=superuser)
 
 
 @pytest.fixture

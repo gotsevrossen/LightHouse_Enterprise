@@ -26,5 +26,7 @@ async def me(
         user_id=principal.user_id,
         tenant_id=principal.tenant_id,
         tenant_name=cast("str", name),
+        # Effective role from get_principal (the lower of token and membership), so the
+        # console never shows more privilege than the server will grant.
         role=principal.role,
     )
