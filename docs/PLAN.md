@@ -183,9 +183,8 @@ forward:
 - Apply the migration to a real Supabase development project and confirm the role grant
   works for Supabase's non-superuser `postgres`; create the `noinherit` login role.
 - First run of the CI workflow on GitHub, and the first container build and deploy.
-- Sign-in trusts the token's tenant and role until it expires; a removed user keeps access
-  for the token's lifetime. Add a membership check against the database, or short token
-  lifetimes plus session revocation, in Phase 2 with real sign-in.
+- ~~Sign-in trusts the token's tenant and role until it expires.~~ Closed in Phase 2: every
+  request is checked against `lh.memberships`.
 - The console and API are assumed same-origin in production (Vite proxy in development).
   If they are ever split across origins, add an explicit CORS allow-list, never a wildcard.
 
@@ -221,6 +220,37 @@ forward:
 plain-English and analyst views, "Ask LightHouse" chat with streaming, triage eval set and
 harness. *Done when:* an analyst can work the queue end to end and the eval gives a
 baseline score to judge prompt and model changes against.
+
+*Phase 2 status (2026-11-25):* code complete and verified locally (server 764 tests, web
+230 tests, evals 89 tests; lint, format and strict type-check clean everywhere). Built:
+alert status changes (analyst and above, audited), streamed "Ask LightHouse" chat with
+fenced context and per-tenant budget and per-user rate limit, the console's alert queue,
+detail (plain-English view for everyone, evidence and reasoning for analysts and above),
+chat panel and Supabase single sign-on (implicit flow, session in memory only), a
+membership check against `lh.memberships` on every request (closes the Phase 0
+carry-forward: removal and demotion now apply on the next request; effective role is the
+lower of token and membership), and the triage eval harness in `evals/`. Verification
+again done with Claude Opus 5.5 as orchestrator at the owner's request. Carried forward:
+
+- **The baseline score does not exist yet.** The committed fixture baseline only proves
+  the harness works. The real baseline needs one run with the Anthropic development key
+  (command in `evals/README.md`) and prices filled in `evals/eval-config.toml`. Open
+  decision 6 waits on it.
+- Someone with security-analyst experience should review the expected severities and
+  `expect_review` labels in `evals/cases/triage.jsonl`, and the composite weights
+  (under-triage 0.40, injection 0.30, review 0.20, over-triage 0.10).
+- Category accuracy cannot be measured: the triage output has no category field. Adding
+  one is a server change to the prompt schema.
+- The harness reads the model's pre-floor severity by wrapping the client, because
+  `TriageResult` only carries the floored value. Exposing the raw model severity on
+  `TriageResult` would remove that wrapper.
+- `evals/uv.lock` is seeded from `server/uv.lock` and must be re-seeded whenever server
+  dependencies change (CI fails otherwise). Dependabot and the pip-audit job do not cover
+  `evals/` yet.
+- SAML itself is untested until a Supabase project with an SSO provider exists; the
+  redirect URL must be on the project's allow-list. The implicit flow carries a known
+  login-CSRF limitation, documented in `web/src/ssoCallback.ts`.
+- Each request now makes one extra short database transaction for the membership check.
 
 **Phase 3 — More Microsoft sources (2–3 weeks).** Entra sign-in risk, Intune posture,
 Sentinel, Microsoft 365 audit. Cross-source correlation by user and device. Posture view

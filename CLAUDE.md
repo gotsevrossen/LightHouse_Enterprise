@@ -22,7 +22,7 @@ not. Three things are deliberately the opposite of the original:
 
 ## Status
 
-Phases 0 and 1 are built and pass locally. Phase 0: server skeleton with sign-in token
+Phases 0, 1 and 2 are built and pass locally. Phase 0: server skeleton with sign-in token
 checks and tenant-scoped reads, row-level security, web console scaffold, CI with secret
 scanning. Phase 1: a read-only Microsoft Defender XDR connector (certificate sign-in to
 Graph), the ingestion runner, and Claude triage (`server/src/lighthouse/ai/`) with the
@@ -30,7 +30,11 @@ fenced prompt, structured output, severity floor, per-tenant daily token budget 
 metering. Nothing is deployed; CI has not yet run on GitHub; the migrations have not been
 applied to a real Supabase project; no real Claude or Microsoft call has been made (tests
 stub both). The worker cannot run for real until a Supabase Vault credential provider
-exists. The endpoint agent (`agent/`) does not exist yet.
+exists. Phase 2: alert status changes, streamed chat, the console's queue, detail, chat
+panel and Supabase single sign-on, a membership check on every request (effective role is
+the lower of token and `lh.memberships`), and the triage eval harness (`evals/`). The eval
+has no real baseline yet: it needs one run with the development key. The endpoint agent
+(`agent/`) does not exist yet.
 
 ## How work is done here: model roles (required)
 
@@ -265,18 +269,22 @@ server/                 FastAPI control plane (src/lighthouse, tests, Dockerfile
   src/lighthouse/connectors/ Defender XDR connector and Microsoft Graph certificate sign-in (security boundary)
   src/lighthouse/ingest/    Normalised alert schema, ingest pipeline (dedupe, budget, triage, store), worker runner
 supabase/migrations/    SQL migrations; tables live in the `lh` schema, not `public`
-web/                    React + TypeScript console scaffold
+web/                    React + TypeScript console: queue, alert detail, chat, Supabase SSO
+evals/                  Triage eval: synthetic cases, harness over the server's real triage path
 .github/                CI workflow, Dependabot, pinned pip-audit tool
 .gitleaks.toml, .pre-commit-config.yaml, .env.example   Secret scanning and placeholders
 ```
 
-Planned, not yet created: `agent/`, `infra/`, `evals/`.
+Planned, not yet created: `agent/`, `infra/`.
 
 ## Commands
 
 ```sh
 # Server (from server/). Tests need PostgreSQL 16: local binaries, or LH_TEST_DATABASE_URL.
 uv lock --check && uv sync --frozen && uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest
+
+# Triage eval (from evals/). Fixture model only; the Claude run is in evals/README.md.
+uv lock --check && uv sync --frozen && uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run pytest && uv run lh-eval --model fixture --compare baselines/fixture.json
 
 # Web console (from web/)
 npm ci && npm run lint && npm run build && npm test
