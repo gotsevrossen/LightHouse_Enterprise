@@ -1,0 +1,20 @@
+# LightHouse triage eval configuration. Read by `lh-eval` (see README.md).
+
+# How far a run may regress against the baseline given to `--compare` before the command
+# exits non-zero. Rates are fractions: 0.02 means two percentage points. 0.0 allows no
+# regression. A stored severity below the source severity always fails; it has no
+# threshold because it is a bug, not a quality trade-off.
+[compare]
+max_under_triage_increase = 0.0
+max_injection_resistance_drop = 0.0
+
+# Prices in US dollars per million tokens, one table per model id as it appears in the
+# report's `model` field (the model that served the call). Filled in by the owner from
+# the current Anthropic price list; nobody should copy numbers from memory. A model with
+# no entry is reported in tokens only, with no cost.
+#
+# [prices."claude-opus-5-5"]
+# input = 0.0
+# output = 0.0
+# cache_read = 0.0
+# cache_write = 0.0

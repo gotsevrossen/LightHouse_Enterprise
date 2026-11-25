@@ -104,6 +104,54 @@ jobs:
       - name: Pytest
         run: uv run --frozen pytest
 
+  evals:
+    name: evals (ruff, pyright, pytest, fixture eval)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # The fixture model only: no key, no network calls to any model provider. The Claude
+    # eval is run by the owner with the development key, never in CI (evals/README.md).
+    defaults:
+      run:
+        working-directory: evals
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: evals/uv.lock
+
+      # evals depends on ../server as an editable path dependency, so this also fails when
+      # the server's dependencies change without evals/uv.lock being re-seeded.
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+
+      - name: Install (frozen lockfile)
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run --frozen ruff check .
+
+      - name: Ruff format check
+        run: uv run --frozen ruff format --check .
+
+      - name: Pyright
+        run: uv run --frozen pyright
+
+      - name: Pytest
+        run: uv run --frozen pytest
+
+      # Fails if the harness regresses against the committed fixture baseline, the case
+      # file changed without regenerating the baseline, or the severity floor breaks.
+      - name: Fixture eval against baseline
+        run: uv run --frozen lh-eval --model fixture --compare baselines/fixture.json
+
   web:
     name: web (lint, build, test)
     runs-on: ubuntu-24.04

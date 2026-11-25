@@ -30,3 +30,6 @@ build/
 Thumbs.db
 .idea/
 .vscode/
+
+# Eval run output (reports may be large; the committed fixture baseline lives in evals/baselines/)
+evals/results/
